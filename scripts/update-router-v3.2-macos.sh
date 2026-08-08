@@ -131,9 +131,29 @@ rm -f "$B"
 
 echo
 echo "=== PERSISTENT FILES ==="
-find /jffs/dynbq -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | sort
-COUNT="$(find /jffs/dynbq -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')"
-[ "$COUNT" -eq 2 ] || { echo "WARN: expected exactly 2 persistent DynBQ files; found $COUNT"; }
+COUNT=0
+EXTRA=0
+for F in /jffs/dynbq/*; do
+    [ -e "$F" ] || continue
+    [ -f "$F" ] || continue
+    NAME="${F##*/}"
+    echo "$NAME"
+    COUNT=$((COUNT+1))
+    case "$NAME" in
+        dynbq.ko|dynbq-controller.sh) ;;
+        *) EXTRA=1 ;;
+    esac
+done
+
+if [ -f /jffs/dynbq/dynbq.ko ] &&
+   [ -f /jffs/dynbq/dynbq-controller.sh ] &&
+   [ "$COUNT" -eq 2 ] &&
+   [ "$EXTRA" -eq 0 ]; then
+    echo "PASS: exactly two persistent DynBQ files"
+else
+    echo "WARN: persistent DynBQ layout unexpected (count=$COUNT extra=$EXTRA)"
+    ls -la /jffs/dynbq 2>/dev/null || true
+fi
 
 echo
 echo "=== V3.2 STATUS ==="
