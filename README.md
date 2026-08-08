@@ -41,8 +41,9 @@ HIGH uses DHD/Runner `dhd_tx_post_packets` and `dhd_tx_complete_packets`, not Li
 - `src/Makefile` — external module Makefile
 - `scripts/dynbq-controller.sh` — production V3.1 controller
 - `scripts/router-cleanup.sh` — removes development leftovers and normalizes persistence
+- `scripts/test-high-macos.sh` — real-load HIGH=192 diagnostic with per-guard failure analysis
 - `tests/state_machine.py` — state-machine regression checks
-- `publish-github.sh` — creates/publishes the GitHub repository, description, topics and `v3.1.0` tag
+- `publish-github.sh` — creates/publishes the GitHub repository, description, topics and `v3.1.1` tag
 
 ## Storage and logging
 
@@ -96,13 +97,22 @@ The tested impl105 firmware does not expose writable host controls for:
 
 V3.1 therefore leaves those controls untouched and retains Broadcom's native internal BA/rate-selection behavior. Runner-level `ba256cfg:1` remains available independently.
 
+## Empirical HIGH=192 test
+
+On a macOS Wi-Fi client, run `scripts/test-high-macos.sh`. It uses `networkQuality -s -v`, watches the router's DHD/Runner state, and reports PASS only after observing an automatic `128 -> 192 -> 128` transition.
+
+V3.1 HIGH currently requires at least 30,000 TX posts/sec for 6 consecutive 2-second samples, `outstanding <= 64`, zero feeder-full/BQ-drop events, and the controller's completion gate to pass.
+
+The diagnostic also reports per-radio:
+
+- maximum observed TX-post rate;
+- maximum outstanding depth;
+- samples above the PPS threshold;
+- maximum consecutive `high_ok=1` streak;
+- failures caused by PPS, outstanding depth, feeder-full, BQ drop, or the completion gate.
+
+This is intentionally diagnostic-first: the HIGH policy is not loosened until a real-load run shows which guard is actually preventing entry.
+
 ## License
 
 The kernel shim is GPL-2.0-only. See `LICENSE`.
-
-
-## Empirical HIGH=192 test
-
-On a macOS Wi-Fi client, run `scripts/test-high-macos.sh`. It uses `networkQuality -s -v`, watches the router's DHD/Runner signals, and reports PASS only after observing an automatic `128 -> 192 -> 128` transition.
-
-V3.1 HIGH requires at least 30,000 TX posts/sec for 6 consecutive 2-second samples, `outstanding <= 64`, zero feeder-full/BQ-drop events, and at least 95% TX completions.
