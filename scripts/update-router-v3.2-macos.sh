@@ -6,6 +6,7 @@ RUSER="${RUSER:-Eabusham2}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/dynbq-controller.sh"
 SOCK="/tmp/dynbq-v32-update-ssh-$$"
+REMOTE_NEW="/tmp/dynbq-controller.v32.new"
 
 cleanup() {
   ssh -S "$SOCK" -O exit "$RUSER@$ROUTER" >/dev/null 2>&1 || true
@@ -16,8 +17,23 @@ trap cleanup EXIT
 [ -s "$SRC" ] || { echo "ERROR: $SRC missing"; exit 2; }
 sh -n "$SRC"
 
+# Open one authenticated SSH control connection so the whole update needs
+# only one password prompt.
 ssh -M -S "$SOCK" -o ControlPersist=120 -fnNT "$RUSER@$ROUTER"
-scp -o ControlPath="$SOCK" "$SRC" "$RUSER@$ROUTER:/tmp/dynbq-controller.v32.new" >/dev/null
+
+# Modern macOS scp uses SFTP by default, but Asuswrt does not provide an
+# SFTP server. Stream the file over plain SSH instead, then verify the exact
+# CRC32 + byte count before executing anything on the router.
+read -r LOCAL_CRC LOCAL_SIZE _ < <(cksum "$SRC")
+
+ssh -S "$SOCK" "$RUSER@$ROUTER" \
+  "umask 077; cat > '$REMOTE_NEW'; set -- \$(cksum '$REMOTE_NEW'); [ \"\$1\" = '$LOCAL_CRC' ] && [ \"\$2\" = '$LOCAL_SIZE' ]" \
+  < "$SRC" || {
+    echo "ERROR: SSH stream transfer or checksum verification failed"
+    exit 3
+  }
+
+echo "PASS: controller transferred over SSH and checksum/size verified"
 
 ssh -S "$SOCK" "$RUSER@$ROUTER" 'sh -s' <<'ROUTER_SH'
 set -eu
