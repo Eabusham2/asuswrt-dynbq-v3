@@ -1,0 +1,9 @@
+*.ko
+*.o
+*.mod
+*.mod.c
+*.symvers
+Module.symvers
+modules.order
+.DS_Store
+__pycache__/

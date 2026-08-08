@@ -1,0 +1,17 @@
+name: lint
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: |
+          sh -n scripts/dynbq-controller.sh
+          sh -n scripts/router-cleanup.sh
+          bash -n publish-github.sh
+      - name: State-machine regression
+        run: python3 tests/state_machine.py
