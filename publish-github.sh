@@ -4,8 +4,8 @@ set -euo pipefail
 OWNER="${OWNER:-Eabusham2}"
 REPO="${REPO:-asuswrt-dynbq-v3}"
 VISIBILITY="${VISIBILITY:-public}"
-VERSION="v3.1.1"
-DESCRIPTION="Experimental DynBQ controller for ASUS GT-BE19000AI on Asuswrt-Merlin: dynamic Broadcom Runner backup queues (64/128/192), sticky low-latency baseline, hardware-counter HIGH mode, and safe HBQD/offload preservation."
+VERSION="v3.2.0"
+DESCRIPTION="Experimental DynBQ controller for ASUS GT-BE19000AI on Asuswrt-Merlin: dynamic Broadcom Runner backup queues (64/128/192), strict three-band hysteresis, and safe HBQD/offload preservation."
 TOPICS=(asuswrt-merlin asus-router broadcom wifi-7 networking router queue-management latency gt-be19000ai dynamic-queue broadcom-runner)
 
 command -v gh >/dev/null 2>&1 || { echo "gh CLI is required: brew install gh"; exit 1; }
@@ -17,7 +17,7 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git config user.name "$OWNER"
   git config user.email "${USER_ID}+${OWNER}@users.noreply.github.com"
   git add .
-  git commit -m "Initial DynBQ V3.1 release"
+  git commit -m "Initial DynBQ release"
 else
   git branch -M main
 fi
@@ -35,7 +35,7 @@ for topic in "${TOPICS[@]}"; do
 done
 
 if ! git rev-parse "$VERSION" >/dev/null 2>&1; then
-  git tag -a "$VERSION" -m "DynBQ V3.1 final safe Runner/HBQD release"
+  git tag -a "$VERSION" -m "DynBQ V3.2 strict three-band hysteresis release"
 fi
 
 git push -u origin main
