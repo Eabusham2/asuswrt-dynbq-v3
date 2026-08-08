@@ -17,14 +17,11 @@ trap cleanup EXIT
 [ -s "$SRC" ] || { echo "ERROR: $SRC missing"; exit 2; }
 sh -n "$SRC"
 
-# Open one authenticated SSH control connection so the whole update needs
-# only one password prompt.
 ssh -M -S "$SOCK" -o ControlPersist=120 -fnNT "$RUSER@$ROUTER"
 
-# Asuswrt may provide neither SFTP nor cksum/md5/sha utilities. Stream the
-# controller over plain SSH and verify the byte count using only POSIX/BusyBox
-# tools that are already required by the controller itself. The router then
-# runs ash syntax and exact policy/version checks before replacing anything.
+# Asuswrt may provide neither SFTP nor cksum/md5/sha utilities. Stream over
+# plain SSH and verify exact byte count; BusyBox ash + exact policy checks run
+# before the installed controller is replaced.
 LOCAL_SIZE="$(wc -c < "$SRC" | tr -d ' ')"
 
 REMOTE_SIZE="$(
@@ -84,10 +81,14 @@ healthy_runner || { echo "ERROR: Runner baseline unhealthy; refusing update"; rm
 
 busybox ash -n "$N" || { echo "ERROR: new controller failed BusyBox ash syntax"; rm -f "$N"; exit 11; }
 
-grep -q '^VERSION=3.2.0$' "$N" || { echo "ERROR: V3.2 controller missing"; rm -f "$N"; exit 12; }
-grep -q '^LOW_IDLE_PPS=1000$' "$N" || { echo "ERROR: V3.2 low-idle policy missing"; rm -f "$N"; exit 13; }
-grep -q '^HIGH_POST_PPS=30000$' "$N" || { echo "ERROR: V3.2 high-entry policy missing"; rm -f "$N"; exit 14; }
-grep -q '^HIGH_HOLD_PPS=20000$' "$N" || { echo "ERROR: V3.2 high-hold policy missing"; rm -f "$N"; exit 15; }
+grep -q '^VERSION=3.2.1$' "$N" || { echo "ERROR: V3.2.1 controller missing"; rm -f "$N"; exit 12; }
+grep -q '^LOW_IDLE_PPS=1500$' "$N" || { echo "ERROR: V3.2.1 low-idle threshold missing"; rm -f "$N"; exit 13; }
+grep -q '^LOW_IDLE_SAMPLES=4$' "$N" || { echo "ERROR: V3.2.1 low-idle timing missing"; rm -f "$N"; exit 14; }
+grep -q '^LOW_EXIT_PPS=3000$' "$N" || { echo "ERROR: V3.2.1 low-exit threshold missing"; rm -f "$N"; exit 15; }
+grep -q '^HIGH_POST_PPS=30000$' "$N" || { echo "ERROR: V3.2.1 high-entry PPS missing"; rm -f "$N"; exit 16; }
+grep -q '^HIGH_SAMPLES=4$' "$N" || { echo "ERROR: V3.2.1 high-entry timing missing"; rm -f "$N"; exit 17; }
+grep -q '^HIGH_OUT_MAX=2048$' "$N" || { echo "ERROR: V3.2.1 high outstanding ceiling missing"; rm -f "$N"; exit 18; }
+grep -q '^HIGH_HOLD_PPS=20000$' "$N" || { echo "ERROR: V3.2.1 high-hold policy missing"; rm -f "$N"; exit 19; }
 
 cp -p "$C" "$B"
 
@@ -97,7 +98,7 @@ chmod 755 "$C"
 rm -f "$N"
 
 if ! "$C" start; then
-    echo "ERROR: V3.2 failed to start; rolling controller back"
+    echo "ERROR: V3.2.1 failed to start; rolling controller back"
     cp "$B" "$C"
     chmod 755 "$C"
     "$C" start >/dev/null 2>&1 || true
@@ -108,7 +109,7 @@ sleep 4
 
 NPROC="$(count_run)"
 if [ "$NPROC" -ne 1 ] || [ ! -e /proc/dynbq ]; then
-    echo "ERROR: V3.2 runtime health failed; rolling controller back"
+    echo "ERROR: V3.2.1 runtime health failed; rolling controller back"
     "$C" stop >/dev/null 2>&1 || true
     cp "$B" "$C"
     chmod 755 "$C"
@@ -156,9 +157,9 @@ else
 fi
 
 echo
-echo "=== V3.2 STATUS ==="
+echo "=== V3.2.1 STATUS ==="
 "$C" status
 
 echo
-echo "PASS: V3.2 installed without reboot; rollback copy removed"
+echo "PASS: V3.2.1 installed without reboot; rollback copy removed"
 ROUTER_SH
