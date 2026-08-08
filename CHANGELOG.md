@@ -1,28 +1,38 @@
+## 3.2.1 - 2026-08-08
+
+- Make LOW easier/faster: MID -> LOW now uses <=1500 TX posts/sec for 4 consecutive 2-second samples (~8 s).
+- Make recovery from LOW quicker: LOW -> MID now uses >=3000 TX posts/sec for one clean sample (~2 s).
+- Keep HIGH very selective at >=30000 TX posts/sec, but reduce entry from 6 to 4 consecutive samples (~8 s).
+- Raise HIGH outstanding safety ceiling from 64 to 2048 after a real V3.2 run reached 56,140 pps with outstanding=1,562 while remaining healthy.
+- Treat feeder-full as HIGH-blocking pressure only at the existing severe threshold (`full_delta >= 512`), instead of any nonzero feeder-full count.
+- HIGH -> MID now needs only 2 failed hold samples (~4 s); HIGH -> LOW needs only 2 consecutive low samples (~4 s).
+- Keep real Runner BQ drop as an immediate LOW transition.
+- Add `pressure=` to runtime stats.
+- Expand state-machine regression tests so wl1 and wl2 each prove MID->LOW, LOW->MID, MID->HIGH, HIGH->MID, HIGH->LOW, and independent behavior.
+- Update the macOS empirical test to report severe-pressure samples separately from harmless nonzero feeder-full counts.
+
 ## 3.2.0 - 2026-08-08
 
 - Remove dead host BA/retry setter probing from the production controller (those setters are empirically unwritable on this firmware), shrinking the persistent controller while retaining native Runner `ba256cfg:1`.
 - Add explicit three-band traffic hysteresis: very-low -> 64, normal -> 128, very-high clean -> 192.
-- MID -> LOW now requires <=1000 TX posts/sec for 6 consecutive 2-second samples, unless a real BQ drop or sustained feeder pressure forces LOW sooner.
-- LOW -> MID requires >=2500 TX posts/sec for 2 consecutive samples, preventing idle-state flapping.
-- HIGH entry remains intentionally strict at >=30000 TX posts/sec for 6 consecutive samples with outstanding <=64 and zero feeder-full/BQ-drop signals.
-- Remove the redundant per-window 95% completion-ratio gate after the first real run reached 52,994 TX posts/sec without entering HIGH; cumulative outstanding <=64 already verifies completions keep pace and avoids false negatives caused by completion timing lag.
+- MID -> LOW requires <=1000 TX posts/sec for 6 consecutive 2-second samples, unless a real BQ drop or sustained feeder pressure forces LOW sooner.
+- LOW -> MID requires >=2500 TX posts/sec for 2 consecutive samples.
+- HIGH entry requires >=30000 TX posts/sec for 6 consecutive samples with outstanding <=64 and zero feeder-full/BQ-drop signals.
+- Remove the redundant per-window 95% completion-ratio gate after the first real run reached 52,994 TX posts/sec without entering HIGH.
 - HIGH hold uses >=20000 TX posts/sec; 3 failed hold samples drop HIGH -> MID.
 - 3 consecutive very-low samples while HIGH drop directly HIGH -> LOW.
 - Add transition reasons and sample sequence numbers to runtime stats/logs.
 - Add `scripts/update-router-v3.2-macos.sh` for validated no-reboot deployment with automatic controller rollback on failure.
-- Fix the macOS updater for Asuswrt SSH servers without SFTP: replace modern `scp` transfer with a raw SSH stream and verify CRC32 + byte count before installation.
+- Fix the macOS updater for Asuswrt SSH servers without SFTP; plain SSH streaming is used instead.
 - Extend the macOS load test to verify both HIGH entry and automatic downshift.
 
 ## 3.1.1 - 2026-08-08
 
 - Add `scripts/test-high-macos.sh` to empirically verify automatic `128 -> 192 -> 128` behavior under real Wi-Fi load.
 - Document the 30,000 TX-posts/sec, 6-sample HIGH trigger used by V3.1.
-- Improve the HIGH diagnostic after the first real run reached 52,994 TX posts/sec without entering HIGH: the test now reports per-guard failures and maximum consecutive `high_ok=1` streak instead of only peak PPS.
-- No router runtime-policy changes from 3.1.0 yet; threshold tuning is deferred until the diagnostic identifies the actual limiting guard.
+- Improve the HIGH diagnostic after the first real run reached 52,994 TX posts/sec without entering HIGH.
 
-# Changelog
-
-## v3.1.0 — 2026-08-07
+## v3.1.0 - 2026-08-07
 
 - Finalized safe production architecture: native HBQD + Runner offload + DynBQ 64/128/192.
 - Removed runnable experimental CoDel/HBQD override scripts.
@@ -30,4 +40,3 @@
 - Added router development-artifact cleanup helper.
 - Documented unsupported host BA/rate setters on the tested impl105 firmware.
 - Added state-machine regression tests and GitHub Actions syntax checks.
-- Added GitHub publishing helper with description, topics and release tag.
