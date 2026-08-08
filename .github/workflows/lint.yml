@@ -12,6 +12,8 @@ jobs:
         run: |
           sh -n scripts/dynbq-controller.sh
           sh -n scripts/router-cleanup.sh
+          bash -n scripts/update-router-v3.2-macos.sh
+          bash -n scripts/test-high-macos.sh
           bash -n publish-github.sh
       - name: State-machine regression
         run: python3 tests/state_machine.py
