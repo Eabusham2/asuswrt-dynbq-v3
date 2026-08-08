@@ -2,7 +2,8 @@
 
 - Add `scripts/test-high-macos.sh` to empirically verify automatic `128 -> 192 -> 128` behavior under real Wi-Fi load.
 - Document the 30,000 TX-posts/sec, 6-sample HIGH trigger used by V3.1.
-- No router runtime-policy changes from 3.1.0.
+- Improve the HIGH diagnostic after the first real run reached 52,994 TX posts/sec without entering HIGH: the test now reports per-guard failures and maximum consecutive `high_ok=1` streak instead of only peak PPS.
+- No router runtime-policy changes from 3.1.0 yet; threshold tuning is deferred until the diagnostic identifies the actual limiting guard.
 
 # Changelog
 
