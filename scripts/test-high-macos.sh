@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROUTER="${ROUTER:-192.168.50.1}"
 RUSER="${RUSER:-Eabusham2}"
-SOCK="/tmp/dynbq-v321-ssh-$$"
-WATCH="/tmp/dynbq-v321-watch-$$.log"
-NEWLOG="/tmp/dynbq-v321-newlog-$$.log"
+SOCK="/tmp/dynbq-v322-ssh-$$"
+WATCH="/tmp/dynbq-v322-watch-$$.log"
+NEWLOG="/tmp/dynbq-v322-newlog-$$.log"
 
 cleanup() {
   ssh -S "$SOCK" -O exit "$RUSER@$ROUTER" >/dev/null 2>&1 || true
@@ -18,9 +18,9 @@ command -v networkQuality >/dev/null 2>&1 || {
   exit 2
 }
 
-echo "=== DYNBQ V3.2.1 THREE-BAND REAL-LOAD TEST ==="
+echo "=== DYNBQ V3.2.2 THREE-BAND REAL-LOAD TEST ==="
 echo "Run this Mac over Wi-Fi, not Ethernet."
-echo "Expected: <=1500 pps sustained -> 64; ordinary load -> 128; >=30000 pps sustained clean -> 192."
+echo "Expected: <=2000 pps sustained -> 64; ordinary load -> 128; >=30000 pps sustained -> 192."
 echo
 
 ssh -M -S "$SOCK" -o ControlPersist=180 -fnNT "$RUSER@$ROUTER"
@@ -57,7 +57,7 @@ networkQuality -s -v || true
 
 echo
 echo "=== COOLDOWN / LOW PHASE ==="
-echo "No generated load for 18 seconds. HIGH should leave quickly; <=1500 pps for ~8 s should select 64."
+echo "No generated load for 18 seconds. HIGH should leave quickly; <=2000 pps for ~6 s should select 64."
 sleep 18
 
 kill "$WATCHPID" >/dev/null 2>&1 || true
