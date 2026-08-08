@@ -10,6 +10,7 @@
 - 3 consecutive very-low samples while HIGH drop directly HIGH -> LOW.
 - Add transition reasons and sample sequence numbers to runtime stats/logs.
 - Add `scripts/update-router-v3.2-macos.sh` for validated no-reboot deployment with automatic controller rollback on failure.
+- Fix the macOS updater for Asuswrt SSH servers without SFTP: replace modern `scp` transfer with a raw SSH stream and verify CRC32 + byte count before installation.
 - Extend the macOS load test to verify both HIGH entry and automatic downshift.
 
 ## 3.1.1 - 2026-08-08
