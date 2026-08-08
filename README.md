@@ -1,12 +1,12 @@
 # Asuswrt DynBQ V3
 
-Experimental dynamic Broadcom DHD/Runner backup-queue control for the **ASUS GT-BE19000AI** on **Asuswrt-Merlin 3006.102.8_2 / Linux 4.19.294**. Current policy version: **V3.2.1**.
+Experimental dynamic Broadcom DHD/Runner backup-queue control for the **ASUS GT-BE19000AI** on **Asuswrt-Merlin 3006.102.8_2 / Linux 4.19.294**. Current policy version: **V3.2.2**.
 
 > This is model/firmware-specific research code. Rebuild and revalidate the kernel module for any different firmware/kernel ABI.
 
 ## Supported architecture
 
-The tested router/dongle requires **HBQD** for Runner offload. The safe production architecture is therefore:
+The tested router/dongle requires **HBQD** for Runner offload. The safe production architecture is:
 
 - Runner TX/RX offload: **ON**
 - backup queue + dynamic backup queue: **ON**
@@ -15,7 +15,7 @@ The tested router/dongle requires **HBQD** for Runner offload. The safe producti
 - Runner CoDel: **OFF**
 - DynBQ BE queue: **64 / 128 / 192**
 
-## V3.2.1 state machine
+## V3.2.2 state machine
 
 Each production radio (`wl1` and `wl2`) runs the same state machine **independently** from its own DHD/Runner counters.
 
@@ -23,29 +23,50 @@ Each production radio (`wl1` and `wl2`) runs the same state machine **independen
 |---|---:|---|
 | LOW | 64 | low sustained traffic or real queue pressure |
 | MID | 128 | normal/default |
-| HIGH | 192 | sustained very-high clean traffic |
+| HIGH | 192 | sustained very-high traffic |
 
 Transitions:
 
-- **MID -> LOW:** <= **1500 TX posts/sec** for **4 consecutive 2-second samples** (~8 s)
-- **MID -> LOW pressure:** any real Runner BQ drop immediately, or >=512 feeder-full events for 4 consecutive samples
-- **LOW -> MID:** >= **3000 TX posts/sec** for **1 sample** (~2 s), with no severe pressure/drop
-- **MID -> HIGH:** >= **30000 TX posts/sec** for **4 consecutive samples** (~8 s), outstanding <= **2048**, no severe feeder pressure, no BQ drop
-- **HIGH hold:** >= **20000 TX posts/sec**, outstanding <=2048, no severe pressure/drop
-- **HIGH -> MID:** 2 consecutive failed HIGH-hold samples (~4 s), or severe feeder pressure immediately
-- **HIGH -> LOW:** any real BQ drop immediately, or <=1500 TX posts/sec for 2 consecutive samples (~4 s)
+- **MID -> LOW:** <= **2000 TX posts/sec** for **3 consecutive 2-second samples** (~6 s)
+- **MID -> LOW pressure:** any real Runner BQ drop immediately, or sustained feeder pressure during non-high traffic
+- **LOW -> MID:** >= **4000 TX posts/sec** for **1 sample** (~2 s)
+- **MID -> HIGH:** >= **30000 TX posts/sec** for **4 consecutive samples** (~8 s), outstanding <= **2048**, no real BQ drop
+- **HIGH hold:** >= **20000 TX posts/sec**, outstanding <=2048, no real BQ drop
+- **HIGH -> MID:** 2 consecutive failed HIGH-hold samples (~4 s)
+- **HIGH -> LOW:** any real BQ drop immediately, or sustained very-low traffic after load collapses
 
-This intentionally makes **LOW easier to reach**, **MID quick to recover when traffic starts**, and **HIGH still hard to enter but easy to leave**.
+Feeder-full by itself does **not** block HIGH during genuine >=30k pps heavy traffic. Real testing showed feeder-full can be large while the Runner remains healthy and BQ drops stay at zero.
 
-### Why V3.2.1 changed HIGH
+This intentionally makes **LOW easy to reach**, **MID quick to recover when traffic starts**, **HIGH hard to enter**, and **HIGH easy to leave**.
 
-A real V3.2 test reached **56,140 TX posts/sec** but never entered HIGH because `outstanding` reached 1,562 and some samples had nonzero feeder-full counts. Those values can occur during healthy high-throughput operation. V3.2.1 therefore:
+## Empirical proof
 
-- raises the outstanding safety ceiling from 64 to **2048**;
-- treats feeder-full as blocking pressure only when the existing severe threshold (`>=512` in a sample) is reached;
-- keeps the very-high entry threshold at 30,000 pps.
+V3.2.2 completed the full automatic cycle on the loaded radio under a real macOS `networkQuality` run:
 
-The queue is still blocked from HIGH by a real BQ drop, severe feeder pressure, or outstanding >2048.
+```text
+64 -> 128 -> 192 -> 128 -> 64
+```
+
+Observed on `wl1`:
+
+- max TX-post rate: **63,497 pps**
+- max outstanding: **1,900**
+- max HIGH_OK streak: **6 samples**
+- max HIGH_HOLD streak: **7 samples**
+- BQ drops: **0**
+
+The transition log showed:
+
+```text
+64 -> 128  low_cleared
+128 -> 192 very_high
+192 -> 128 high_cleared
+128 -> 64  very_low
+```
+
+`wl2` stayed at 64 because it carried no heavy test traffic, confirming the radios operate independently.
+
+Runner capabilities remained healthy throughout: `txoffl:1`, `rxoffl:1`, `bkupq:1`, `hbqd:1`, `dynbkupq:1`, `codel:0`, `ba256cfg:1`.
 
 ## Files
 
