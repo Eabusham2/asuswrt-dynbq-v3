@@ -1,3 +1,15 @@
+## 3.2.2 - 2026-08-08
+
+- Make LOW slightly easier: MID -> LOW now uses <=2000 TX posts/sec for 3 consecutive 2-second samples (~6 s).
+- LOW -> MID now uses >=4000 TX posts/sec for one sample (~2 s).
+- Keep HIGH entry at >=30000 TX posts/sec for 4 consecutive samples (~8 s) with outstanding <=2048 and zero real BQ drops.
+- Stop treating feeder-full pressure as a HIGH blocker during true very-high throughput; feeder-full can be large during healthy heavy traffic.
+- Keep real Runner BQ drops as immediate LOW and keep HIGH easy to leave when load ends.
+- Empirically proved the complete automatic cycle on wl1 under real Wi-Fi load: 64 -> 128 -> 192 -> 128 -> 64.
+- Proof run reached 63,497 TX posts/sec, max outstanding 1,900, 6 consecutive HIGH_OK samples, 7 consecutive HIGH_HOLD samples, and zero BQ drops.
+- wl2 independently remained at 64 because it carried no heavy test traffic, confirming per-radio independence.
+- Runner remained healthy throughout: txoffl:1, rxoffl:1, bkupq:1, hbqd:1, dynbkupq:1, codel:0, ba256cfg:1.
+
 ## 3.2.1 - 2026-08-08
 
 - Make LOW easier/faster: MID -> LOW now uses <=1500 TX posts/sec for 4 consecutive 2-second samples (~8 s).
