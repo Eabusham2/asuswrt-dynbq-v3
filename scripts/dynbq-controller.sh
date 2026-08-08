@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=3.2.1
+VERSION=3.2.2
 BASE=/jffs/dynbq
 PID=/tmp/dynbq.pid
 LOG=/tmp/dynbq.log
@@ -12,19 +12,16 @@ MID=128
 HIGH=192
 INTERVAL=2
 
-# LOW should be easy to reach at genuinely light load, but still use
-# hysteresis so ordinary background traffic does not flap the queue.
-LOW_IDLE_PPS=1500
-LOW_IDLE_SAMPLES=4
-LOW_EXIT_PPS=3000
+# LOW: a little easier to reach, with hysteresis to prevent flapping.
+LOW_IDLE_PPS=2000
+LOW_IDLE_SAMPLES=3
+LOW_EXIT_PPS=4000
 LOW_EXIT_SAMPLES=1
 LOW_PRESS_SAMPLES=4
 FULL_SAMPLE_MIN=512
 
-# HIGH is still reserved for sustained very-high traffic.  Real hardware
-# testing showed outstanding can legitimately rise well above 64 while
-# completions are healthy, so use a generous safety ceiling and only treat
-# feeder-full as pressure when it reaches FULL_SAMPLE_MIN.
+# HIGH: only sustained very-high traffic. Feeder-full is NOT itself a blocker
+# at very high throughput; real BQ drops and excessive outstanding work remain.
 HIGH_POST_PPS=30000
 HIGH_SAMPLES=4
 HIGH_OUT_MAX=2048
@@ -88,7 +85,6 @@ runner_healthy()
         echo "$L" | grep -q 'codel:0' || return 1
         echo "$L" | grep -q 'ba256cfg:1' || return 1
     done
-    return 0
 }
 
 wait_runner()
@@ -154,7 +150,8 @@ ctx()
 
 statval()
 {
-    R="$1"; K="$2"
+    R="$1"
+    K="$2"
     printf '%s\n' "$STATS" | awk -v R="$R" -v K="$K" '
         index($0,"dhd_helper/radio_idx=" R) { hit=1; next }
         hit && index($0,K "=") {
@@ -173,7 +170,9 @@ flows()
 
 set_radio()
 {
-    R="$1"; Q="$2"; CTX="$3"
+    R="$1"
+    Q="$2"
+    CTX="$3"
     [ -n "$CTX" ] || return 0
     for F in $(flows "$R"); do
         echo "$CTX $F $Q" >/proc/dynbq || return 1
@@ -182,14 +181,24 @@ set_radio()
 
 delta32()
 {
-    N="$1"; O="$2"
-    if [ "$N" -ge "$O" ]; then echo $((N-O)); else echo $((4294967296-O+N)); fi
+    N="$1"
+    O="$2"
+    if [ "$N" -ge "$O" ]; then
+        echo $((N-O))
+    else
+        echo $((4294967296-O+N))
+    fi
 }
 
 outstanding()
 {
-    P="$1"; C="$2"
-    if [ "$P" -ge "$C" ]; then X=$((P-C)); else X=$((4294967296-C+P)); fi
+    P="$1"
+    C="$2"
+    if [ "$P" -ge "$C" ]; then
+        X=$((P-C))
+    else
+        X=$((4294967296-C+P))
+    fi
     [ "$X" -gt 4096 ] && X=4096
     echo "$X"
 }
@@ -240,9 +249,13 @@ run()
 
     while :; do
         sleep "$INTERVAL"
-        if ! refresh_stats; then log "BDMF unavailable; retrying"; continue; fi
+        if ! refresh_stats; then
+            log "BDMF unavailable; retrying"
+            continue
+        fi
 
-        CTX1="$(ctx 1)"; CTX2="$(ctx 2)"
+        CTX1="$(ctx 1)"
+        CTX2="$(ctx 2)"
 
         for R in 1 2; do
             eval CTX=\$CTX$R
@@ -252,38 +265,67 @@ run()
             ND="$(statval "$R" dhd_bq_tx_drop_packets)"
             NP="$(statval "$R" dhd_tx_post_packets)"
             NC="$(statval "$R" dhd_tx_complete_packets)"
-            [ -n "$NF" ] || NF=0; [ -n "$ND" ] || ND=0
-            [ -n "$NP" ] || NP=0; [ -n "$NC" ] || NC=0
+            [ -n "$NF" ] || NF=0
+            [ -n "$ND" ] || ND=0
+            [ -n "$NP" ] || NP=0
+            [ -n "$NC" ] || NC=0
 
             eval INIT=\$INIT$R
             if [ "$INIT" -eq 0 ]; then
-                eval PF$R="$NF"; eval PD$R="$ND"; eval PP$R="$NP"; eval PC$R="$NC"
+                eval PF$R="$NF"
+                eval PD$R="$ND"
+                eval PP$R="$NP"
+                eval PC$R="$NC"
                 eval INIT$R=1
                 set_radio "$R" "$MID" "$CTX" || true
                 continue
             fi
 
-            eval OF=\$PF$R; eval OD=\$PD$R; eval OP=\$PP$R; eval OC=\$PC$R
-            DF="$(delta32 "$NF" "$OF")"; DD="$(delta32 "$ND" "$OD")"
-            DP="$(delta32 "$NP" "$OP")"; DC="$(delta32 "$NC" "$OC")"
-            eval PF$R="$NF"; eval PD$R="$ND"; eval PP$R="$NP"; eval PC$R="$NC"
+            eval OF=\$PF$R
+            eval OD=\$PD$R
+            eval OP=\$PP$R
+            eval OC=\$PC$R
+            DF="$(delta32 "$NF" "$OF")"
+            DD="$(delta32 "$ND" "$OD")"
+            DP="$(delta32 "$NP" "$OP")"
+            DC="$(delta32 "$NC" "$OC")"
+            eval PF$R="$NF"
+            eval PD$R="$ND"
+            eval PP$R="$NP"
+            eval PC$R="$NC"
 
-            PPS=$((DP/INTERVAL)); OUT="$(outstanding "$NP" "$NC")"
-            eval CUR=\$S$R; eval PR=\$PR$R; eval CL=\$CL$R; eval HC=\$HC$R; eval HX=\$HX$R
-            eval SQ=\$SQ$R; SQ=$((SQ+1)); eval SQ$R="$SQ"
-            NEW="$CUR"; REASON=hold
+            PPS=$((DP/INTERVAL))
+            OUT="$(outstanding "$NP" "$NC")"
+            eval CUR=\$S$R
+            eval PR=\$PR$R
+            eval CL=\$CL$R
+            eval HC=\$HC$R
+            eval HX=\$HX$R
+            eval SQ=\$SQ$R
+            SQ=$((SQ+1))
+            eval SQ$R="$SQ"
 
-            PRESS_NOW=0; [ "$DF" -ge "$FULL_SAMPLE_MIN" ] && PRESS_NOW=1
+            NEW="$CUR"
+            REASON=hold
+
+            PRESS_NOW=0
+            [ "$DF" -ge "$FULL_SAMPLE_MIN" ] && PRESS_NOW=1
+
             LOW_IDLE_NOW=0
-            [ "$PPS" -le "$LOW_IDLE_PPS" ] && [ "$PRESS_NOW" -eq 0 ] && [ "$DD" -eq 0 ] && LOW_IDLE_NOW=1
+            [ "$PPS" -le "$LOW_IDLE_PPS" ] && [ "$DD" -eq 0 ] && LOW_IDLE_NOW=1
 
             HIGH_OK=0
-            [ "$PPS" -ge "$HIGH_POST_PPS" ] && [ "$OUT" -le "$HIGH_OUT_MAX" ] && \
-                [ "$PRESS_NOW" -eq 0 ] && [ "$DD" -eq 0 ] && [ "$DP" -gt 0 ] && HIGH_OK=1
+            [ "$PPS" -ge "$HIGH_POST_PPS" ] &&
+                [ "$OUT" -le "$HIGH_OUT_MAX" ] &&
+                [ "$DD" -eq 0 ] &&
+                [ "$DP" -gt 0 ] &&
+                HIGH_OK=1
 
             HIGH_HOLD_OK=0
-            [ "$PPS" -ge "$HIGH_HOLD_PPS" ] && [ "$OUT" -le "$HIGH_OUT_MAX" ] && \
-                [ "$PRESS_NOW" -eq 0 ] && [ "$DD" -eq 0 ] && HIGH_HOLD_OK=1
+            [ "$PPS" -ge "$HIGH_HOLD_PPS" ] &&
+                [ "$OUT" -le "$HIGH_OUT_MAX" ] &&
+                [ "$DD" -eq 0 ] &&
+                HIGH_HOLD_OK=1
 
             case "$CUR" in
             "$MID")
@@ -291,37 +333,46 @@ run()
                 if [ "$DD" -gt 0 ]; then
                     NEW=$LOW; REASON=bqdrop; PR=0; CL=0; HC=0
                 else
-                    if [ "$PRESS_NOW" -eq 1 ]; then PR=$((PR+1)); CL=0; HC=0
+                    if [ "$HIGH_OK" -eq 1 ]; then
+                        HC=$((HC+1)); PR=0; CL=0
                     else
-                        PR=0
+                        HC=0
+                        if [ "$PRESS_NOW" -eq 1 ]; then PR=$((PR+1)); else PR=0; fi
                         if [ "$LOW_IDLE_NOW" -eq 1 ]; then CL=$((CL+1)); else CL=0; fi
-                        if [ "$HIGH_OK" -eq 1 ]; then HC=$((HC+1)); else HC=0; fi
                     fi
-                    if [ "$PR" -ge "$LOW_PRESS_SAMPLES" ]; then
-                        NEW=$LOW; REASON=pressure; PR=0; CL=0; HC=0
+
+                    if [ "$HC" -ge "$HIGH_SAMPLES" ]; then
+                        NEW=$HIGH; REASON=very_high; PR=0; CL=0; HC=0
                     elif [ "$CL" -ge "$LOW_IDLE_SAMPLES" ]; then
                         NEW=$LOW; REASON=very_low; PR=0; CL=0; HC=0
-                    elif [ "$HC" -ge "$HIGH_SAMPLES" ]; then
-                        NEW=$HIGH; REASON=very_high; PR=0; CL=0; HC=0
+                    elif [ "$PR" -ge "$LOW_PRESS_SAMPLES" ]; then
+                        NEW=$LOW; REASON=pressure; PR=0; CL=0; HC=0
                     fi
                 fi
                 ;;
+
             "$LOW")
                 PR=0; HC=0; HX=0
-                if [ "$DD" -gt 0 ] || [ "$PRESS_NOW" -eq 1 ]; then CL=0
+                if [ "$DD" -gt 0 ]; then
+                    CL=0
                 elif [ "$PPS" -ge "$LOW_EXIT_PPS" ]; then
                     CL=$((CL+1))
-                    if [ "$CL" -ge "$LOW_EXIT_SAMPLES" ]; then NEW=$MID; REASON=low_cleared; CL=0; fi
-                else CL=0
+                    if [ "$CL" -ge "$LOW_EXIT_SAMPLES" ]; then
+                        NEW=$MID; REASON=low_cleared; CL=0
+                    fi
+                else
+                    CL=0
                 fi
                 ;;
+
             "$HIGH")
                 PR=0; HC=0
-                if [ "$DD" -gt 0 ]; then NEW=$LOW; REASON=bqdrop; CL=0; HX=0
-                elif [ "$PRESS_NOW" -eq 1 ]; then NEW=$MID; REASON=pressure; CL=0; HX=0
+                if [ "$DD" -gt 0 ]; then
+                    NEW=$LOW; REASON=bqdrop; CL=0; HX=0
                 else
                     if [ "$LOW_IDLE_NOW" -eq 1 ]; then CL=$((CL+1)); else CL=0; fi
                     if [ "$HIGH_HOLD_OK" -eq 1 ]; then HX=0; else HX=$((HX+1)); fi
+
                     if [ "$CL" -ge "$HIGH_TO_LOW_SAMPLES" ]; then
                         NEW=$LOW; REASON=very_low; CL=0; HX=0
                     elif [ "$HX" -ge "$HIGH_EXIT_SAMPLES" ]; then
@@ -329,12 +380,23 @@ run()
                     fi
                 fi
                 ;;
-            *) NEW=$MID; REASON=invalid_state; PR=0; CL=0; HC=0; HX=0 ;;
+
+            *)
+                NEW=$MID; REASON=invalid_state; PR=0; CL=0; HC=0; HX=0
+                ;;
             esac
 
-            eval S$R="$NEW"; eval PR$R="$PR"; eval CL$R="$CL"; eval HC$R="$HC"; eval HX$R="$HX"
+            eval S$R="$NEW"
+            eval PR$R="$PR"
+            eval CL$R="$CL"
+            eval HC$R="$HC"
+            eval HX$R="$HX"
 
-            if ! set_radio "$R" "$NEW" "$CTX"; then log "ERROR wl$R set BQ=$NEW failed"; continue; fi
+            if ! set_radio "$R" "$NEW" "$CTX"; then
+                log "ERROR wl$R set BQ=$NEW failed"
+                continue
+            fi
+
             if [ "$NEW" != "$CUR" ]; then
                 log "wl$R postpps=${PPS} full+${DF} bqdrop+${DD} outstanding=${OUT} reason=${REASON} BQ ${CUR}->${NEW}"
             fi
@@ -342,7 +404,8 @@ run()
             echo "seq=$SQ pps=$PPS post_delta=$DP complete_delta=$DC full_delta=$DF bqdrop_delta=$DD outstanding=$OUT pressure=$PRESS_NOW low_idle=$LOW_IDLE_NOW high_ok=$HIGH_OK high_hold_ok=$HIGH_HOLD_OK target=$NEW" >"/tmp/dynbq.wl$R.stats"
         done
 
-        echo "$S1" >/tmp/dynbq.wl1; echo "$S2" >/tmp/dynbq.wl2
+        echo "$S1" >/tmp/dynbq.wl1
+        echo "$S2" >/tmp/dynbq.wl2
     done
 }
 
@@ -350,41 +413,55 @@ case "${1:-}" in
 run)
     run
     ;;
+
 start)
     PIDS="$(run_pids)"
     if [ -n "$PIDS" ]; then
         COUNT="$(printf '%s\n' "$PIDS" | wc -l | tr -d ' ')"
         if [ "$COUNT" -eq 1 ]; then
-            P="$(printf '%s\n' "$PIDS" | head -1)"; echo "$P" >"$PID"
-            echo "DynBQ V${VERSION} already running PID $P"; exit 0
+            P="$(printf '%s\n' "$PIDS" | head -1)"
+            echo "$P" >"$PID"
+            echo "DynBQ V${VERSION} already running PID $P"
+            exit 0
         fi
         for P in $PIDS; do kill "$P" 2>/dev/null || true; done
         sleep 2
     fi
+
     rm -f "$PID" /tmp/dynbq.wl1 /tmp/dynbq.wl2 /tmp/dynbq.wl1.stats /tmp/dynbq.wl2.stats
     : >"$LOG"
+
     ensure_module || { echo "ERROR: could not load dynbq.ko"; exit 1; }
     nohup "$0" run </dev/null >>"$LOG" 2>&1 &
     sleep 6
+
     if [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; then
         echo "DynBQ V${VERSION} RUNNING PID $(cat "$PID")"
     else
-        echo "ERROR: DynBQ V${VERSION} failed runtime health"; tail -60 "$LOG" 2>/dev/null || true; exit 1
+        echo "ERROR: DynBQ V${VERSION} failed runtime health"
+        tail -60 "$LOG" 2>/dev/null || true
+        exit 1
     fi
     ;;
+
 stop)
     PIDS="$(run_pids)"
     for P in $PIDS; do kill "$P" 2>/dev/null || true; done
     sleep 3
-    [ -n "$(run_pids)" ] && { for P in $(run_pids); do kill -9 "$P" 2>/dev/null || true; done; }
+    if [ -n "$(run_pids)" ]; then
+        for P in $(run_pids); do kill -9 "$P" 2>/dev/null || true; done
+    fi
     restore_mid
     rm -f "$PID" "$LOG" /tmp/dynbq.wl1 /tmp/dynbq.wl2 /tmp/dynbq.wl1.stats /tmp/dynbq.wl2.stats
     echo "DynBQ stopped; MID=128 restored and runtime files removed"
     ;;
+
 status)
     PIDS="$(run_pids)"
-    if [ -n "$PIDS" ]; then echo "DynBQ V${VERSION} RUNNING PID(s) $(printf '%s' "$PIDS" | tr '\n' ' ')"
-    else echo "DynBQ V${VERSION} STOPPED"
+    if [ -n "$PIDS" ]; then
+        echo "DynBQ V${VERSION} RUNNING PID(s) $(printf '%s' "$PIDS" | tr '\n' ' ')"
+    else
+        echo "DynBQ V${VERSION} STOPPED"
     fi
     echo "wl1 target=$(cat /tmp/dynbq.wl1 2>/dev/null || echo 128)"
     echo "wl2 target=$(cat /tmp/dynbq.wl2 2>/dev/null || echo 128)"
@@ -397,6 +474,7 @@ status)
     echo "--- recent log ---"
     tail -20 "$LOG" 2>/dev/null || true
     ;;
+
 *)
     echo "Usage: $0 start|stop|status"
     exit 1
