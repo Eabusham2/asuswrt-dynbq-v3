@@ -21,19 +21,28 @@ sh -n "$SRC"
 # only one password prompt.
 ssh -M -S "$SOCK" -o ControlPersist=120 -fnNT "$RUSER@$ROUTER"
 
-# Modern macOS scp uses SFTP by default, but Asuswrt does not provide an
-# SFTP server. Stream the file over plain SSH instead, then verify the exact
-# CRC32 + byte count before executing anything on the router.
-read -r LOCAL_CRC LOCAL_SIZE _ < <(cksum "$SRC")
+# Asuswrt may provide neither SFTP nor cksum/md5/sha utilities. Stream the
+# controller over plain SSH and verify the byte count using only POSIX/BusyBox
+# tools that are already required by the controller itself. The router then
+# runs ash syntax and exact policy/version checks before replacing anything.
+LOCAL_SIZE="$(wc -c < "$SRC" | tr -d ' ')"
 
-ssh -S "$SOCK" "$RUSER@$ROUTER" \
-  "umask 077; cat > '$REMOTE_NEW'; set -- \$(cksum '$REMOTE_NEW'); [ \"\$1\" = '$LOCAL_CRC' ] && [ \"\$2\" = '$LOCAL_SIZE' ]" \
-  < "$SRC" || {
-    echo "ERROR: SSH stream transfer or checksum verification failed"
-    exit 3
-  }
+REMOTE_SIZE="$(
+  ssh -S "$SOCK" "$RUSER@$ROUTER" \
+    "umask 077; cat > '$REMOTE_NEW'; wc -c < '$REMOTE_NEW' | tr -d ' '" \
+    < "$SRC"
+)" || {
+  echo "ERROR: SSH stream transfer failed"
+  exit 3
+}
 
-echo "PASS: controller transferred over SSH and checksum/size verified"
+[ "$REMOTE_SIZE" = "$LOCAL_SIZE" ] || {
+  echo "ERROR: transfer size mismatch: local=$LOCAL_SIZE remote=${REMOTE_SIZE:-missing}"
+  ssh -S "$SOCK" "$RUSER@$ROUTER" "rm -f '$REMOTE_NEW'" >/dev/null 2>&1 || true
+  exit 4
+}
+
+echo "PASS: controller transferred over plain SSH; exact byte count verified ($LOCAL_SIZE bytes)"
 
 ssh -S "$SOCK" "$RUSER@$ROUTER" 'sh -s' <<'ROUTER_SH'
 set -eu
@@ -71,14 +80,14 @@ count_run()
 }
 
 echo "=== PRECHECK RUNNER ==="
-healthy_runner || { echo "ERROR: Runner baseline unhealthy; refusing update"; exit 10; }
+healthy_runner || { echo "ERROR: Runner baseline unhealthy; refusing update"; rm -f "$N"; exit 10; }
 
-busybox ash -n "$N" || { echo "ERROR: new controller failed BusyBox ash syntax"; exit 11; }
+busybox ash -n "$N" || { echo "ERROR: new controller failed BusyBox ash syntax"; rm -f "$N"; exit 11; }
 
-grep -q '^VERSION=3.2.0$' "$N" || { echo "ERROR: V3.2 controller missing"; exit 12; }
-grep -q '^LOW_IDLE_PPS=1000$' "$N" || { echo "ERROR: V3.2 low-idle policy missing"; exit 13; }
-grep -q '^HIGH_POST_PPS=30000$' "$N" || { echo "ERROR: V3.2 high-entry policy missing"; exit 14; }
-grep -q '^HIGH_HOLD_PPS=20000$' "$N" || { echo "ERROR: V3.2 high-hold policy missing"; exit 15; }
+grep -q '^VERSION=3.2.0$' "$N" || { echo "ERROR: V3.2 controller missing"; rm -f "$N"; exit 12; }
+grep -q '^LOW_IDLE_PPS=1000$' "$N" || { echo "ERROR: V3.2 low-idle policy missing"; rm -f "$N"; exit 13; }
+grep -q '^HIGH_POST_PPS=30000$' "$N" || { echo "ERROR: V3.2 high-entry policy missing"; rm -f "$N"; exit 14; }
+grep -q '^HIGH_HOLD_PPS=20000$' "$N" || { echo "ERROR: V3.2 high-hold policy missing"; rm -f "$N"; exit 15; }
 
 cp -p "$C" "$B"
 
