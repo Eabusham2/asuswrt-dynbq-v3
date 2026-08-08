@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=3.2.0
+VERSION=3.2.1
 BASE=/jffs/dynbq
 PID=/tmp/dynbq.pid
 LOG=/tmp/dynbq.log
@@ -12,21 +12,25 @@ MID=128
 HIGH=192
 INTERVAL=2
 
-# LOW is reserved for genuinely tiny load or real queue pressure.
-LOW_IDLE_PPS=1000
-LOW_IDLE_SAMPLES=6
-LOW_EXIT_PPS=2500
-LOW_EXIT_SAMPLES=2
+# LOW should be easy to reach at genuinely light load, but still use
+# hysteresis so ordinary background traffic does not flap the queue.
+LOW_IDLE_PPS=1500
+LOW_IDLE_SAMPLES=4
+LOW_EXIT_PPS=3000
+LOW_EXIT_SAMPLES=1
 LOW_PRESS_SAMPLES=4
 FULL_SAMPLE_MIN=512
 
-# HIGH is deliberately difficult to enter and easier to leave.
+# HIGH is still reserved for sustained very-high traffic.  Real hardware
+# testing showed outstanding can legitimately rise well above 64 while
+# completions are healthy, so use a generous safety ceiling and only treat
+# feeder-full as pressure when it reaches FULL_SAMPLE_MIN.
 HIGH_POST_PPS=30000
-HIGH_SAMPLES=6
-HIGH_OUT_MAX=64
+HIGH_SAMPLES=4
+HIGH_OUT_MAX=2048
 HIGH_HOLD_PPS=20000
-HIGH_EXIT_SAMPLES=3
-HIGH_TO_LOW_SAMPLES=3
+HIGH_EXIT_SAMPLES=2
+HIGH_TO_LOW_SAMPLES=2
 
 trim_log()
 {
@@ -271,15 +275,15 @@ run()
 
             PRESS_NOW=0; [ "$DF" -ge "$FULL_SAMPLE_MIN" ] && PRESS_NOW=1
             LOW_IDLE_NOW=0
-            [ "$PPS" -le "$LOW_IDLE_PPS" ] && [ "$DF" -eq 0 ] && [ "$DD" -eq 0 ] && LOW_IDLE_NOW=1
+            [ "$PPS" -le "$LOW_IDLE_PPS" ] && [ "$PRESS_NOW" -eq 0 ] && [ "$DD" -eq 0 ] && LOW_IDLE_NOW=1
 
             HIGH_OK=0
             [ "$PPS" -ge "$HIGH_POST_PPS" ] && [ "$OUT" -le "$HIGH_OUT_MAX" ] && \
-                [ "$DF" -eq 0 ] && [ "$DD" -eq 0 ] && [ "$DP" -gt 0 ] && HIGH_OK=1
+                [ "$PRESS_NOW" -eq 0 ] && [ "$DD" -eq 0 ] && [ "$DP" -gt 0 ] && HIGH_OK=1
 
             HIGH_HOLD_OK=0
             [ "$PPS" -ge "$HIGH_HOLD_PPS" ] && [ "$OUT" -le "$HIGH_OUT_MAX" ] && \
-                [ "$DF" -eq 0 ] && [ "$DD" -eq 0 ] && HIGH_HOLD_OK=1
+                [ "$PRESS_NOW" -eq 0 ] && [ "$DD" -eq 0 ] && HIGH_HOLD_OK=1
 
             case "$CUR" in
             "$MID")
@@ -335,7 +339,7 @@ run()
                 log "wl$R postpps=${PPS} full+${DF} bqdrop+${DD} outstanding=${OUT} reason=${REASON} BQ ${CUR}->${NEW}"
             fi
 
-            echo "seq=$SQ pps=$PPS post_delta=$DP complete_delta=$DC full_delta=$DF bqdrop_delta=$DD outstanding=$OUT low_idle=$LOW_IDLE_NOW high_ok=$HIGH_OK high_hold_ok=$HIGH_HOLD_OK target=$NEW" >"/tmp/dynbq.wl$R.stats"
+            echo "seq=$SQ pps=$PPS post_delta=$DP complete_delta=$DC full_delta=$DF bqdrop_delta=$DD outstanding=$OUT pressure=$PRESS_NOW low_idle=$LOW_IDLE_NOW high_ok=$HIGH_OK high_hold_ok=$HIGH_HOLD_OK target=$NEW" >"/tmp/dynbq.wl$R.stats"
         done
 
         echo "$S1" >/tmp/dynbq.wl1; echo "$S2" >/tmp/dynbq.wl2
