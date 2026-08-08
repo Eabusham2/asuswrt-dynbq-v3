@@ -1,6 +1,6 @@
 # Asuswrt DynBQ V3
 
-Experimental dynamic Broadcom DHD/Runner backup-queue control for the **ASUS GT-BE19000AI** on **Asuswrt-Merlin 3006.102.8_2 / Linux 4.19.294**.
+Experimental dynamic Broadcom DHD/Runner backup-queue control for the **ASUS GT-BE19000AI** on **Asuswrt-Merlin 3006.102.8_2 / Linux 4.19.294**. Current policy version: **V3.2.0**.
 
 > This is a model/firmware-specific research project. Do not load its kernel module on a different kernel/firmware build without rebuilding and validating against that exact ABI.
 
@@ -19,31 +19,38 @@ The tested router/dongle requires **HBQD** for Runner offload. Disabling HBQD ca
 
 ## State machine
 
+V3.2 uses deliberately separated traffic bands and hysteresis so the queue grows only for sustained very-high load and shrinks only when traffic is genuinely very low or the Runner reports queue pressure.
+
 | State | Backup queue | Purpose |
 |---|---:|---|
-| LOW | 64 | sustained pressure / real BQ drop |
-| MID | 128 | sticky normal baseline |
-| HIGH | 192 | sustained clean high packet load |
+| LOW | 64 | very-low sustained load, real BQ drop, or sustained severe feeder pressure |
+| MID | 128 | sticky normal/default baseline |
+| HIGH | 192 | sustained very-high clean hardware-offloaded load |
 
-Transitions in V3.1:
+Transitions in V3.2:
 
-- MID → LOW: 4 consecutive pressure samples, or any real Runner BQ drop
-- LOW → MID: 3 clean samples
-- MID → HIGH: 6 sustained clean high-load samples
-- HIGH → MID: 3 non-high samples or ordinary pressure
-- HIGH → LOW: real BQ drop
+- MID -> LOW (idle): <= **1000 TX posts/sec** for **6 consecutive 2-second samples** (~12 s)
+- MID -> LOW (pressure): any real Runner BQ drop immediately, or >=512 feeder-full events for 4 consecutive samples
+- LOW -> MID: >= **2500 TX posts/sec** for **2 consecutive samples** (~4 s), with no pressure/drop
+- MID -> HIGH: >= **30000 TX posts/sec** for **6 consecutive samples** (~12 s), outstanding <=64, no feeder-full event, no BQ drop
+- HIGH hold: >= **20000 TX posts/sec** with the same clean queue conditions
+- HIGH -> MID: 3 consecutive failed HIGH-hold samples (~6 s), or feeder pressure immediately
+- HIGH -> LOW: any real BQ drop immediately, or <=1000 TX posts/sec for 3 consecutive samples (~6 s)
 
-HIGH uses DHD/Runner `dhd_tx_post_packets` and `dhd_tx_complete_packets`, not Linux interface byte counters that may be bypassed by hardware offload.
+This gives the intended hysteresis: **64 only when very low/bad, 128 for ordinary traffic, and 192 only when very high and clean**.
+
+HIGH uses DHD/Runner `dhd_tx_post_packets`, `dhd_tx_complete_packets`, and cumulative outstanding work, not Linux interface byte counters that hardware offload may bypass. The previous per-window 95% completion-ratio gate was removed in V3.2 because `outstanding <= 64` already establishes that completions are keeping pace while avoiding false failures from completion-timing lag.
 
 ## Files
 
 - `src/dynbq.c` — GPL kernel shim exposing `/proc/dynbq`
 - `src/Makefile` — external module Makefile
-- `scripts/dynbq-controller.sh` — production V3.1 controller
+- `scripts/dynbq-controller.sh` — production V3.2 controller
 - `scripts/router-cleanup.sh` — removes development leftovers and normalizes persistence
-- `scripts/test-high-macos.sh` — real-load HIGH=192 diagnostic with per-guard failure analysis
+- `scripts/update-router-v3.2-macos.sh` — validated no-reboot V3.2 deployment with rollback
+- `scripts/test-high-macos.sh` — empirical three-band HIGH/downshift test
 - `tests/state_machine.py` — state-machine regression checks
-- `publish-github.sh` — creates/publishes the GitHub repository, description, topics and `v3.1.1` tag
+- `publish-github.sh` — creates/publishes the GitHub repository, description, topics and `v3.2.0` tag
 
 ## Storage and logging
 
@@ -95,24 +102,12 @@ The tested impl105 firmware does not expose writable host controls for:
 - `ampdu_mpdu`
 - `ampdu_rr_retry_limit_tid` for BE TIDs 0/3
 
-V3.1 therefore leaves those controls untouched and retains Broadcom's native internal BA/rate-selection behavior. Runner-level `ba256cfg:1` remains available independently.
-
-## Empirical HIGH=192 test
-
-On a macOS Wi-Fi client, run `scripts/test-high-macos.sh`. It uses `networkQuality -s -v`, watches the router's DHD/Runner state, and reports PASS only after observing an automatic `128 -> 192 -> 128` transition.
-
-V3.1 HIGH currently requires at least 30,000 TX posts/sec for 6 consecutive 2-second samples, `outstanding <= 64`, zero feeder-full/BQ-drop events, and the controller's completion gate to pass.
-
-The diagnostic also reports per-radio:
-
-- maximum observed TX-post rate;
-- maximum outstanding depth;
-- samples above the PPS threshold;
-- maximum consecutive `high_ok=1` streak;
-- failures caused by PPS, outstanding depth, feeder-full, BQ drop, or the completion gate.
-
-This is intentionally diagnostic-first: the HIGH policy is not loosened until a real-load run shows which guard is actually preventing entry.
+V3.2 therefore leaves those controls untouched and retains Broadcom's native internal BA/rate-selection behavior. Runner-level `ba256cfg:1` remains available independently.
 
 ## License
 
 The kernel shim is GPL-2.0-only. See `LICENSE`.
+
+## Empirical three-band test
+
+On a macOS Wi-Fi client, run `scripts/test-high-macos.sh`. It uses `networkQuality -s -v`, watches deduplicated controller samples, proves HIGH entry only after the strict very-high streak, then verifies HIGH automatically downshifts after load ends. During the cooldown it also reports whether the radio accumulated enough <=1000 pps samples to select LOW=64.
