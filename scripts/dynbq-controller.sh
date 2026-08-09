@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=3.2.5
+VERSION=3.2.6
 BASE=/jffs/dynbq
 PID=/tmp/dynbq.pid
 LOG=/tmp/dynbq.log
@@ -168,6 +168,8 @@ flows()
         $2 ~ /^[0-9]+$/ && ($3 == 0 || $3 == 3) && $4 !~ /^33:33:/ { print $2 }'
 }
 
+# Write only when a flowring's target changes. A newly-created flowring has no
+# cache file, so it is initialized immediately even if the radio state is held.
 set_radio()
 {
     R="$1"
@@ -175,7 +177,10 @@ set_radio()
     CTX="$3"
     [ -n "$CTX" ] || return 0
     for F in $(flows "$R"); do
+        C="/tmp/dynbq.applied.$R.$F"
+        [ "$(cat "$C" 2>/dev/null)" = "$Q" ] && continue
         echo "$CTX $F $Q" >/proc/dynbq || return 1
+        echo "$Q" >"$C"
     done
 }
 
@@ -429,6 +434,7 @@ start)
     fi
 
     rm -f "$PID" /tmp/dynbq.wl1 /tmp/dynbq.wl2 /tmp/dynbq.wl1.stats /tmp/dynbq.wl2.stats
+    rm -f /tmp/dynbq.applied.*
     : >"$LOG"
 
     ensure_module || { echo "ERROR: could not load dynbq.ko"; exit 1; }
@@ -453,6 +459,7 @@ stop)
     fi
     restore_mid
     rm -f "$PID" "$LOG" /tmp/dynbq.wl1 /tmp/dynbq.wl2 /tmp/dynbq.wl1.stats /tmp/dynbq.wl2.stats
+    rm -f /tmp/dynbq.applied.*
     echo "DynBQ stopped; MID=128 restored and runtime files removed"
     ;;
 
