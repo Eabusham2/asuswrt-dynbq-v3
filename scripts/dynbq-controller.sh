@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=3.2.6
+VERSION=3.2.7
 BASE=/jffs/dynbq
 PID=/tmp/dynbq.pid
 LOG=/tmp/dynbq.log
@@ -16,14 +16,14 @@ INTERVAL=2
 LOW_IDLE_PPS=2000
 LOW_IDLE_SAMPLES=6
 LOW_EXIT_PPS=4000
-LOW_EXIT_SAMPLES=4
+LOW_EXIT_SAMPLES=7
 LOW_PRESS_SAMPLES=7
 FULL_SAMPLE_MIN=512
 
 # HIGH: only sustained very-high traffic. Feeder-full is NOT itself a blocker
 # at very high throughput; real BQ drops and excessive outstanding work remain.
 HIGH_POST_PPS=30000
-HIGH_SAMPLES=7
+HIGH_SAMPLES=10
 HIGH_OUT_MAX=2048
 HIGH_HOLD_PPS=20000
 HIGH_EXIT_SAMPLES=2
