@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=3.2.7
+VERSION=3.2.8
 BASE=/jffs/dynbq
 PID=/tmp/dynbq.pid
 LOG=/tmp/dynbq.log
@@ -12,22 +12,23 @@ MID=128
 HIGH=192
 INTERVAL=2
 
-# LOW: a little easier to reach, with hysteresis to prevent flapping.
+# LOW: hysteresis to prevent flapping. v3.2.8 adds two samples (~4s)
+# to every normal timed state transition; emergency BQ-drop downshifts remain immediate.
 LOW_IDLE_PPS=2000
-LOW_IDLE_SAMPLES=6
+LOW_IDLE_SAMPLES=8
 LOW_EXIT_PPS=4000
-LOW_EXIT_SAMPLES=7
-LOW_PRESS_SAMPLES=7
+LOW_EXIT_SAMPLES=9
+LOW_PRESS_SAMPLES=9
 FULL_SAMPLE_MIN=512
 
 # HIGH: only sustained very-high traffic. Feeder-full is NOT itself a blocker
 # at very high throughput; real BQ drops and excessive outstanding work remain.
 HIGH_POST_PPS=30000
-HIGH_SAMPLES=10
+HIGH_SAMPLES=12
 HIGH_OUT_MAX=2048
 HIGH_HOLD_PPS=20000
-HIGH_EXIT_SAMPLES=2
-HIGH_TO_LOW_SAMPLES=2
+HIGH_EXIT_SAMPLES=4
+HIGH_TO_LOW_SAMPLES=4
 
 trim_log()
 {
