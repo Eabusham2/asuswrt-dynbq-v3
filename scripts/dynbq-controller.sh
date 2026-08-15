@@ -1,28 +1,29 @@
 #!/bin/sh
 
-VERSION=3.2.8
+VERSION=3.3.0
 BASE=/jffs/dynbq
 PID=/tmp/dynbq.pid
 LOG=/tmp/dynbq.log
 LOG_MAX_BYTES=32768
 LOG_KEEP_LINES=120
+RADIOS="0 1 2"
 
 LOW=64
 MID=128
 HIGH=192
 INTERVAL=2
 
-# LOW: hysteresis to prevent flapping. v3.2.8 adds two samples (~4s)
-# to every normal timed state transition; emergency BQ-drop downshifts remain immediate.
+# LOW: hysteresis to prevent flapping. Emergency BQ-drop downshifts remain immediate.
 LOW_IDLE_PPS=2000
 LOW_IDLE_SAMPLES=8
 LOW_EXIT_PPS=4000
+# 2.4 GHz has much lower service rates, so keep the shallow queue longer.
+LOW_EXIT_PPS_2G=12000
 LOW_EXIT_SAMPLES=9
 LOW_PRESS_SAMPLES=9
 FULL_SAMPLE_MIN=512
 
-# HIGH: only sustained very-high traffic. Feeder-full is NOT itself a blocker
-# at very high throughput; real BQ drops and excessive outstanding work remain.
+# HIGH: only sustained very-high traffic on 5/6 GHz. 2.4 GHz is capped at MID=128.
 HIGH_POST_PPS=30000
 HIGH_SAMPLES=12
 HIGH_OUT_MAX=2048
@@ -75,7 +76,7 @@ runner_cap_line()
 
 runner_healthy()
 {
-    for R in 1 2; do
+    for R in $RADIOS; do
         L="$(runner_cap_line "$R")"
         [ -n "$L" ] || return 1
         echo "$L" | grep -q 'txoffl:1' || return 1
@@ -212,7 +213,7 @@ outstanding()
 restore_mid()
 {
     refresh_stats >/dev/null 2>&1 || return 0
-    for R in 1 2; do
+    for R in $RADIOS; do
         CTX="$(ctx "$R" 2>/dev/null || true)"
         set_radio "$R" "$MID" "$CTX" >/dev/null 2>&1 || true
     done
@@ -220,7 +221,9 @@ restore_mid()
 
 cleanup_signal()
 {
-    trap - INT TERM HUP
+    trap - INT TERM
+    # HUP is intentionally ignored so an SSH/session hangup cannot kill DynBQ.
+    trap '' HUP
     log "controller-v${VERSION} received stop signal; restoring MID=128"
     restore_mid
     rm -f "$PID"
@@ -231,7 +234,11 @@ run()
 {
     ensure_module || { log "ERROR module load failed"; exit 1; }
     echo $$ >"$PID"
-    trap cleanup_signal INT TERM HUP
+
+    # nohup starts us with SIGHUP ignored. Do not override that with a HUP cleanup
+    # trap: v3.2.8 did so and could die when the launching SSH session disappeared.
+    trap '' HUP
+    trap cleanup_signal INT TERM
 
     if ! wait_runner; then
         log "ERROR Runner offload/HBQD baseline unavailable"
@@ -239,19 +246,21 @@ run()
         exit 1
     fi
 
-    S1=$MID; S2=$MID
-    PR1=0; PR2=0
-    CL1=0; CL2=0
-    HC1=0; HC2=0
-    HX1=0; HX2=0
-    INIT1=0; INIT2=0
-    PF1=0; PF2=0
-    PD1=0; PD2=0
-    PP1=0; PP2=0
-    PC1=0; PC2=0
-    SQ1=0; SQ2=0
+    for R in $RADIOS; do
+        eval S$R=$MID
+        eval PR$R=0
+        eval CL$R=0
+        eval HC$R=0
+        eval HX$R=0
+        eval INIT$R=0
+        eval PF$R=0
+        eval PD$R=0
+        eval PP$R=0
+        eval PC$R=0
+        eval SQ$R=0
+    done
 
-    log "controller-v${VERSION} started PID=$$ LOW=64 MID=128 HIGH=192"
+    log "controller-v${VERSION} started PID=$$ radios=wl0,wl1,wl2 LOW=64 MID=128 HIGH=192 (wl0 max=128)"
 
     while :; do
         sleep "$INTERVAL"
@@ -260,10 +269,11 @@ run()
             continue
         fi
 
-        CTX1="$(ctx 1)"
-        CTX2="$(ctx 2)"
+        for R in $RADIOS; do
+            eval CTX$R="\$(ctx $R)"
+        done
 
-        for R in 1 2; do
+        for R in $RADIOS; do
             eval CTX=\$CTX$R
             [ -n "$CTX" ] || continue
 
@@ -333,6 +343,13 @@ run()
                 [ "$DD" -eq 0 ] &&
                 HIGH_HOLD_OK=1
 
+            # 2.4 GHz never needs the 192-packet HIGH state; its service rate is
+            # lower and a deep packet queue turns into too much time at range.
+            if [ "$R" -eq 0 ]; then
+                HIGH_OK=0
+                HIGH_HOLD_OK=0
+            fi
+
             case "$CUR" in
             "$MID")
                 HX=0
@@ -359,9 +376,11 @@ run()
 
             "$LOW")
                 PR=0; HC=0; HX=0
+                EXIT_PPS="$LOW_EXIT_PPS"
+                [ "$R" -eq 0 ] && EXIT_PPS="$LOW_EXIT_PPS_2G"
                 if [ "$DD" -gt 0 ]; then
                     CL=0
-                elif [ "$PPS" -ge "$LOW_EXIT_PPS" ]; then
+                elif [ "$PPS" -ge "$EXIT_PPS" ]; then
                     CL=$((CL+1))
                     if [ "$CL" -ge "$LOW_EXIT_SAMPLES" ]; then
                         NEW=$MID; REASON=low_cleared; CL=0
@@ -373,7 +392,9 @@ run()
 
             "$HIGH")
                 PR=0; HC=0
-                if [ "$DD" -gt 0 ]; then
+                if [ "$R" -eq 0 ]; then
+                    NEW=$MID; REASON=2g_high_cap; CL=0; HX=0
+                elif [ "$DD" -gt 0 ]; then
                     NEW=$LOW; REASON=bqdrop; CL=0; HX=0
                 else
                     if [ "$LOW_IDLE_NOW" -eq 1 ]; then CL=$((CL+1)); else CL=0; fi
@@ -410,8 +431,10 @@ run()
             echo "seq=$SQ pps=$PPS post_delta=$DP complete_delta=$DC full_delta=$DF bqdrop_delta=$DD outstanding=$OUT pressure=$PRESS_NOW low_idle=$LOW_IDLE_NOW high_ok=$HIGH_OK high_hold_ok=$HIGH_HOLD_OK target=$NEW" >"/tmp/dynbq.wl$R.stats"
         done
 
-        echo "$S1" >/tmp/dynbq.wl1
-        echo "$S2" >/tmp/dynbq.wl2
+        for R in $RADIOS; do
+            eval STATE=\$S$R
+            echo "$STATE" >"/tmp/dynbq.wl$R"
+        done
     done
 }
 
@@ -434,7 +457,8 @@ start)
         sleep 2
     fi
 
-    rm -f "$PID" /tmp/dynbq.wl1 /tmp/dynbq.wl2 /tmp/dynbq.wl1.stats /tmp/dynbq.wl2.stats
+    rm -f "$PID" /tmp/dynbq.wl0 /tmp/dynbq.wl1 /tmp/dynbq.wl2 \
+        /tmp/dynbq.wl0.stats /tmp/dynbq.wl1.stats /tmp/dynbq.wl2.stats
     rm -f /tmp/dynbq.applied.*
     : >"$LOG"
 
@@ -459,9 +483,10 @@ stop)
         for P in $(run_pids); do kill -9 "$P" 2>/dev/null || true; done
     fi
     restore_mid
-    rm -f "$PID" "$LOG" /tmp/dynbq.wl1 /tmp/dynbq.wl2 /tmp/dynbq.wl1.stats /tmp/dynbq.wl2.stats
+    rm -f "$PID" "$LOG" /tmp/dynbq.wl0 /tmp/dynbq.wl1 /tmp/dynbq.wl2 \
+        /tmp/dynbq.wl0.stats /tmp/dynbq.wl1.stats /tmp/dynbq.wl2.stats
     rm -f /tmp/dynbq.applied.*
-    echo "DynBQ stopped; MID=128 restored and runtime files removed"
+    echo "DynBQ stopped; MID=128 restored on wl0/wl1/wl2 and runtime files removed"
     ;;
 
 status)
@@ -471,16 +496,19 @@ status)
     else
         echo "DynBQ V${VERSION} STOPPED"
     fi
-    echo "wl1 target=$(cat /tmp/dynbq.wl1 2>/dev/null || echo 128)"
-    echo "wl2 target=$(cat /tmp/dynbq.wl2 2>/dev/null || echo 128)"
+    for R in $RADIOS; do
+        echo "wl$R target=$(cat /tmp/dynbq.wl$R 2>/dev/null || echo 128)"
+    done
     echo "--- live hardware signals ---"
-    echo "wl1: $(cat /tmp/dynbq.wl1.stats 2>/dev/null || echo pending)"
-    echo "wl2: $(cat /tmp/dynbq.wl2.stats 2>/dev/null || echo pending)"
+    for R in $RADIOS; do
+        echo "wl$R: $(cat /tmp/dynbq.wl$R.stats 2>/dev/null || echo pending)"
+    done
     echo "--- Runner capabilities ---"
-    echo "wl1: $(runner_cap_line 1)"
-    echo "wl2: $(runner_cap_line 2)"
+    for R in $RADIOS; do
+        echo "wl$R: $(runner_cap_line "$R")"
+    done
     echo "--- recent log ---"
-    tail -20 "$LOG" 2>/dev/null || true
+    tail -25 "$LOG" 2>/dev/null || true
     ;;
 
 *)
