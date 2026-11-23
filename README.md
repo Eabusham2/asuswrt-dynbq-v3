@@ -1,8 +1,12 @@
-# Asuswrt DynBQ v3
+# DynBQ for Asuswrt-Merlin — experimental Broadcom Runner queue control
 
-DynBQ adjusts Broadcom DHD/Runner backup queues according to each radio's traffic and queue-pressure counters. It is **experimental, firmware-specific router software**. The current source release is **3.3.1**.
+DynBQ is an **experimental Broadcom DHD/Runner backup-queue controller** developed on the **ASUS GT-BE19000AI with Asuswrt-Merlin**. It adjusts each radio's queue using traffic and queue-pressure counters. The current source release is **3.3.1**.
+
+The source is intended for firmware developers and existing validated installations. Releases include a shell controller and Linux kernel-module source; a module built and validated for the router's **exact firmware** is required. No prebuilt module or universal installer is supplied.
 
 The controller uses queue sizes 64, 128, and 192 on 5/6 GHz, and 64 or 128 on 2.4 GHz. It preserves Runner offload and HBQD rather than changing those capabilities.
+
+[Source releases](https://github.com/Eabusham2/asuswrt-dynbq-v3/releases) · [Compatibility](#compatibility-and-release-contents) · [FAQ](#frequently-asked-questions) · [Report a problem](#report-a-problem)
 
 ## Compatibility and release contents
 
@@ -18,7 +22,7 @@ Before running DynBQ, you need:
 - SSH administrator access, writable JFFS storage, and BusyBox shell utilities.
 - An independently verified Runner baseline on all three radios: `txoffl:1`, `rxoffl:1`, `bkupq:1`, `hbqd:1`, `dynbkupq:1`, `codel:0`, `ba256cfg:1`.
 
-The source is intended for firmware developers and existing validated installations. There is no universal first-install script. Do not load a module built for another firmware.
+Do not load a module built for another firmware.
 
 ## Get the source
 
@@ -145,6 +149,54 @@ CI checks shell syntax, version consistency, and behavioral scenarios that execu
 
 See [release maintenance](docs/releases.md) for the manual, versioned source-release workflow. Repository changes and documentation pushes do not publish a release automatically.
 
+Contributor and coding-assistant guidance lives in [AGENTS.md](AGENTS.md).
+
+## Frequently asked questions
+
+### Which routers and firmware versions can run DynBQ?
+
+The recorded historical baseline is GT-BE19000AI with Merlin `3006.102.8_2` and Linux `4.19.294`. It does not certify the current release, another model, or later firmware. A matching kernel version string alone is insufficient; see the [compatibility requirements](#compatibility-and-release-contents).
+
+### Where can I download a compiled dynbq.ko?
+
+The [source releases](https://github.com/Eabusham2/asuswrt-dynbq-v3/releases) do not include one. Building requires the exact firmware's configured build tree, compiler, generated headers, and module symbols. The [module-build section](#kernel-module-build) explains that boundary; the controller updater requires an already validated module.
+
+### Why does 2.4 GHz never enter HIGH?
+
+The current policy caps `wl0` at MID=128 and uses a higher traffic threshold to leave LOW. Only `wl1` and `wl2` can reach HIGH=192. This is an intentional [per-radio policy](#current-queue-policy), not evidence that the controller has stopped working.
+
+### Will DynBQ improve my internet speed or latency?
+
+No general performance improvement is established by this source release. Offline tests verify queue-selection behavior, while [historical observations](docs/verified-observations.md) describe earlier queue transitions on one setup. The [load-observation helper](#logs-and-diagnostics) reports behavior without certifying a throughput or latency benefit.
+
+### Does the updater flash firmware or reboot the router?
+
+It replaces the controller in an existing installation and retains the current module. It does not flash firmware, reboot, or install startup persistence. Review the [update instructions](#update-an-existing-installation); a firmware change requires fresh module compatibility validation.
+
+### Can I test the project without a router?
+
+Yes. With POSIX shell, Bash, and Python 3 available, run `sh scripts/check.sh` from the repository root. These [offline checks](#development-and-releases) exercise the production policy with synthetic counters and do not load a kernel module or contact a router.
+
+## Report a problem
+
+[Open an issue](https://github.com/Eabusham2/asuswrt-dynbq-v3/issues) with the following information:
+
+- Source tag or commit, controller version, and whether the problem occurs during build, update, startup, or an active session.
+- Router model, full firmware version, kernel version, and the build source/toolchain used for `dynbq.ko`.
+- Expected behavior, observed behavior, affected radio, and the shortest steps that reproduce it.
+- Relevant output from the [status command](#use-the-controller) and the nearby transition or error lines; review shared logs for private information first.
+- For an offline failure, the exact command and output from `sh scripts/check.sh`.
+
+Keep hardware observations separate from local test results. A compiler error or policy-test failure can be reported without installing the module or changing router settings.
+
+## Related independent projects
+
+- [FlowCache Doctor](https://github.com/Eabusham2/asuswrt-merlin-flowcache-doctor) — Asuswrt-Merlin diagnostics and targeted FlowCache recovery.
+- [Router VPN](https://github.com/Eabusham2/router-vpn) — a self-hosted VPN/proxy platform with native client applications.
+- [AdGuard Home Block Page](https://github.com/Eabusham2/adguard-home-blockpage) — an HTTP explanation page for domains blocked by AdGuard Home.
+
+These projects have their own installation and compatibility requirements. DynBQ has no dependency on them.
+
 ## License
 
-[GPL-2.0-only](LICENSE).
+The kernel shim is licensed under [GPL-2.0-only](LICENSE); see its [source notice](src/dynbq.c).
