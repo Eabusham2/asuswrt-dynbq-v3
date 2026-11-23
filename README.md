@@ -200,3 +200,12 @@ These projects have their own installation and compatibility requirements. DynBQ
 ## License
 
 The kernel shim is licensed under [GPL-2.0-only](LICENSE); see its [source notice](src/dynbq.c).
+
+## Search keywords (ignore)
+
+`dynbq`, `asus-router`, `asuswrt-merlin`, `gt-be19000ai`, `broadcom`, `broadcom-dhd`,
+`broadcom-runner`, `backup-queue`, `dynamic-queue`, `queue-management`, `per-radio-policy`, `flowring`,
+`hbqd`, `runner-offload`, `wireless-networking`, `2-4-ghz`, `5-ghz`, `6-ghz`,
+`embedded-linux`, `linux-kernel-module`, `firmware-development`, `exact-firmware-abi`, `experimental`, `source-only`,
+`busybox`, `posix-shell`, `bash`, `ssh`, `jffs`, `hysteresis`,
+`queue-pressure`, `traffic-counters`, `state-machine`, `offline-tests`, `controller-updater`, `sha256-checksums`
