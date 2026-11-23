@@ -1,117 +1,150 @@
-# Asuswrt DynBQ V3
+# Asuswrt DynBQ v3
 
-Experimental dynamic Broadcom DHD/Runner backup-queue control for the **ASUS GT-BE19000AI** on **Asuswrt-Merlin 3006.102.8_2 / Linux 4.19.294**. Current policy version: **V3.2.2**.
+DynBQ adjusts Broadcom DHD/Runner backup queues according to each radio's traffic and queue-pressure counters. It is **experimental, firmware-specific router software**. The current source release is **3.3.1**.
 
-> This is model/firmware-specific research code. Rebuild and revalidate the kernel module for any different firmware/kernel ABI.
+The controller uses queue sizes 64, 128, and 192 on 5/6 GHz, and 64 or 128 on 2.4 GHz. It preserves Runner offload and HBQD rather than changing those capabilities.
 
-## Supported architecture
+## Compatibility and release contents
 
-The tested router/dongle requires **HBQD** for Runner offload. The safe production architecture is:
+The project's recorded hardware baseline is an **ASUS GT-BE19000AI running Asuswrt-Merlin 3006.102.8_2 / Linux 4.19.294**. That historical observation does not establish compatibility with another model, firmware build, or kernel ABI. See [historical observations](docs/verified-observations.md).
 
-- Runner TX/RX offload: **ON**
-- backup queue + dynamic backup queue: **ON**
-- HBQD: **ON**
-- Runner BA256 capability: **ON**
-- Runner CoDel: **OFF**
-- DynBQ BE queue: **64 / 128 / 192**
+[Releases](https://github.com/Eabusham2/asuswrt-dynbq-v3/releases) provide an experimental **source archive and SHA-256 checksum**. The archive includes the controller, kernel-module source, documentation, helpers, and tests. It does **not** include a compiled `dynbq.ko`, the Broadcom firmware tree, or a complete build toolchain.
 
-## V3.2.2 state machine
+Before running DynBQ, you need:
 
-Each production radio (`wl1` and `wl2`) runs the same state machine **independently** from its own DHD/Runner counters.
+- A kernel module compiled and validated against the **exact firmware and kernel ABI** on the router. A matching kernel version string alone is insufficient.
+- The firmware's `dhd` command and a working `/jffs/bin/bdmf_shell` with access to Runner counters.
+- The radio mapping expected by this controller: `wl0` = 2.4 GHz, `wl1` = 5 GHz, `wl2` = 6 GHz.
+- SSH administrator access, writable JFFS storage, and BusyBox shell utilities.
+- An independently verified Runner baseline on all three radios: `txoffl:1`, `rxoffl:1`, `bkupq:1`, `hbqd:1`, `dynbkupq:1`, `codel:0`, `ba256cfg:1`.
 
-| State | Queue | Meaning |
-|---|---:|---|
-| LOW | 64 | low sustained traffic or real queue pressure |
-| MID | 128 | normal/default |
-| HIGH | 192 | sustained very-high traffic |
+The source is intended for firmware developers and existing validated installations. There is no universal first-install script. Do not load a module built for another firmware.
 
-Transitions:
+## Get the source
 
-- **MID -> LOW:** <= **2000 TX posts/sec** for **3 consecutive 2-second samples** (~6 s)
-- **MID -> LOW pressure:** any real Runner BQ drop immediately, or sustained feeder pressure during non-high traffic
-- **LOW -> MID:** >= **4000 TX posts/sec** for **1 sample** (~2 s)
-- **MID -> HIGH:** >= **30000 TX posts/sec** for **4 consecutive samples** (~8 s), outstanding <= **2048**, no real BQ drop
-- **HIGH hold:** >= **20000 TX posts/sec**, outstanding <=2048, no real BQ drop
-- **HIGH -> MID:** 2 consecutive failed HIGH-hold samples (~4 s)
-- **HIGH -> LOW:** any real BQ drop immediately, or sustained very-low traffic after load collapses
+Download the versioned source archive and matching `.sha256` file from the release page. Verify the archive before extracting it:
 
-Feeder-full by itself does **not** block HIGH during genuine >=30k pps heavy traffic. Real testing showed feeder-full can be large while the Runner remains healthy and BQ drops stay at zero.
+```bash
+# Linux
+sha256sum -c asuswrt-dynbq-v3-3.3.1-source.sha256
 
-This intentionally makes **LOW easy to reach**, **MID quick to recover when traffic starts**, **HIGH hard to enter**, and **HIGH easy to leave**.
-
-## Empirical proof
-
-V3.2.2 completed the full automatic cycle on the loaded radio under a real macOS `networkQuality` run:
-
-```text
-64 -> 128 -> 192 -> 128 -> 64
+# macOS
+shasum -a 256 -c asuswrt-dynbq-v3-3.3.1-source.sha256
 ```
 
-Observed on `wl1`:
+You can also clone the repository and select a release tag:
 
-- max TX-post rate: **63,497 pps**
-- max outstanding: **1,900**
-- max HIGH_OK streak: **6 samples**
-- max HIGH_HOLD streak: **7 samples**
-- BQ drops: **0**
-
-The transition log showed:
-
-```text
-64 -> 128  low_cleared
-128 -> 192 very_high
-192 -> 128 high_cleared
-128 -> 64  very_low
+```bash
+git clone https://github.com/Eabusham2/asuswrt-dynbq-v3.git
+cd asuswrt-dynbq-v3
+git checkout v3.3.1
 ```
 
-`wl2` stayed at 64 because it carried no heavy test traffic, confirming the radios operate independently.
+### Kernel-module build
 
-Runner capabilities remained healthy throughout: `txoffl:1`, `rxoffl:1`, `bkupq:1`, `hbqd:1`, `dynbkupq:1`, `codel:0`, `ba256cfg:1`.
+`src/Makefile` defines the external-module target for `src/dynbq.c`. Build it inside a configured, matching firmware build environment with the correct compiler, generated headers, and module symbols. For an environment that supports external module builds, the invocation has this form:
 
-## Files
+```bash
+make -C "$KERNEL_BUILD" M="$PWD/src" \
+  ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" modules
+```
 
-- `src/dynbq.c` — GPL kernel shim exposing `/proc/dynbq`
-- `scripts/dynbq-controller.sh` — production controller
-- `scripts/update-router-v3.2-macos.sh` — no-reboot updater with rollback
-- `scripts/test-high-macos.sh` — empirical 64/128/192 test
-- `scripts/router-cleanup.sh` — removes development leftovers
-- `tests/state_machine.py` — regression tests for **wl1 and wl2**, including independent up/down transitions
+Set those variables from the firmware's own build configuration. This repository does not supply or validate that environment. A successful compile alone does not prove that the module's calls into Broadcom's Runner driver are compatible.
 
-## Storage/logging
-
-Persistent router storage remains only:
+The expected installation layout is:
 
 ```text
 /jffs/dynbq/dynbq.ko
 /jffs/dynbq/dynbq-controller.sh
 ```
 
-Runtime state/logging is under `/tmp`. `/tmp/dynbq.log` is capped at **32 KiB**, trimmed to the newest 120 lines, reset when the controller starts, and disappears on reboot. No DynBQ cron job or persistent JFFS log is required.
+The module provides `/proc/dynbq`. It resolves the firmware's `dhd_runner_notify` symbol and accepts only the three queue sizes used by the controller. Validate the module and Runner behavior on the intended firmware before enabling the controller or adding boot persistence.
 
-## Updating the router
+## Update an existing installation
 
-From a Mac clone of the repo:
+The updater replaces the **controller only**. It requires an existing controller and a firmware-matched module at the paths above. It does not build, replace, or certify the module, flash firmware, or reboot the router.
 
-```bash
-cd ~/Downloads/asuswrt-dynbq-v3
-git pull --ff-only
-bash scripts/update-router-v3.2-macos.sh
-```
-
-The updater uses plain SSH streaming (no SFTP/scp requirement), BusyBox `ash -n`, Runner health checks, exact policy checks, and automatic rollback if the new controller fails.
-
-## Testing all three bands
+From macOS, set your own SSH connection values, then run the updater from the source directory:
 
 ```bash
-bash scripts/test-high-macos.sh
+export ROUTER="router.example"   # Replace with your router's hostname or IP
+export RUSER="router-admin"      # Replace with its SSH administrator username
+bash scripts/update-router-macos.sh
 ```
 
-The test watches deduplicated per-radio samples, generates a real Wi-Fi load with `networkQuality`, then verifies up/down transitions and cooldown. A radio that carries no test traffic should stay LOW; that is expected because radios are independent.
+Both variables are required; the helpers contain no personal login or network defaults. SSH uses your normal key/password authentication and host-key verification.
 
-## Known limitations
+The updater transfers the controller over plain SSH, checks its byte count and BusyBox shell syntax, checks the version and Runner baseline, and rolls back the controller if its startup or post-update health check fails. The old `scripts/update-router-v3.2-macos.sh` path remains a compatibility entry point to the same updater.
 
-The tested impl105 firmware does not expose writable host controls for `ampdu_ba_wsize`, `ampdu_mpdu`, or `ampdu_rr_retry_limit_tid` for BE TIDs 0/3. DynBQ leaves them untouched and keeps Broadcom's native rate/BA behavior. Runner-level `ba256cfg:1` remains active independently.
+Firmware upgrades require a fresh module compatibility review before reusing this updater.
+
+## Use the controller
+
+On a router with a validated installation:
+
+```sh
+/jffs/dynbq/dynbq-controller.sh start
+/jffs/dynbq/dynbq-controller.sh status
+/jffs/dynbq/dynbq-controller.sh stop
+```
+
+`start` avoids launching another controller when one is already running. `status` prints each radio's target, live counters, Runner capabilities, and recent transitions. `stop` attempts to restore MID=128 on all radios and removes the controller's runtime files. If Runner access has failed, independently verify the queue state rather than relying only on the stop message.
+
+Startup persistence is not installed by the updater. If you add a call to an existing Merlin startup hook, preserve its other commands and first validate manual start/stop on the exact firmware. This release has no new reboot-persistence hardware certification.
+
+## Current queue policy
+
+Each radio keeps its own state and consecutive-sample counters. Samples are taken approximately every two seconds; command execution and unavailable Runner statistics can make wall-clock intervals longer.
+
+| Radio | LOW | MID | HIGH | LOW → MID traffic threshold |
+|---|---:|---:|---:|---:|
+| `wl0` — 2.4 GHz | 64 | 128 | Disabled | ≥12,000 TX posts/sec |
+| `wl1` — 5 GHz | 64 | 128 | 192 | ≥4,000 TX posts/sec |
+| `wl2` — 6 GHz | 64 | 128 | 192 | ≥4,000 TX posts/sec |
+
+| Transition | Requirement |
+|---|---|
+| MID → LOW, idle | ≤2,000 TX posts/sec for 8 consecutive samples; no BQ drops |
+| MID → LOW, pressure | Feeder-full delta ≥512 for 9 consecutive non-HIGH-eligible samples |
+| LOW → MID | The radio's recovery threshold for 9 consecutive samples; no BQ drops |
+| MID → HIGH, 5/6 GHz | ≥30,000 TX posts/sec for 12 consecutive samples, outstanding ≤2,048, and no BQ drops |
+| HIGH hold, 5/6 GHz | ≥20,000 TX posts/sec, outstanding ≤2,048, and no BQ drops |
+| HIGH → MID | 4 consecutive failed HIGH-hold samples |
+| HIGH → LOW, idle | 4 consecutive idle samples |
+| MID/HIGH → LOW, BQ drop | Immediate on a real Runner BQ-drop delta for an allowed state |
+
+The 2.4 GHz radio never enters HIGH. A stale HIGH state there returns to MID. During genuine heavy traffic, feeder-full signals alone do not block HIGH on 5/6 GHz. The controller writes a flowring when its target changes or when it first sees the flowring.
+
+## Logs and diagnostics
+
+Runtime state is kept under `/tmp`, including `/tmp/dynbq.log`, per-radio `.stats` files, the PID file, and flowring target caches. The controller checks the log size at 32 KiB and trims it to the most recent 120 lines. It resets the log on start and removes it on stop. `/tmp` data also disappears at reboot; no persistent JFFS log or cron job is required.
+
+For an optional macOS Wi-Fi load observation:
+
+```bash
+ROUTER="router.example" RUSER="router-admin" bash scripts/test-high-macos.sh
+```
+
+This runs macOS `networkQuality`, observes all three radios, and reports transitions. It creates real network load and may not sustain enough traffic to enter HIGH. A partial result is not a hardware certification; 2.4 GHz cannot produce a HIGH transition by design. Offline CI does not run this helper.
+
+If startup fails, check the firmware-matched module, `/proc/dynbq`, `bdmf_shell`, all three Runner capability lines, and the recent log before retrying. Do not disable HBQD to make a failed precheck pass.
+
+### Legacy migration helper
+
+`scripts/router-cleanup.sh` is retained for installations containing this project's earlier experimental setup. **It is not a routine install or update step.** It unsets four legacy NVRAM keys, replaces marked DynBQ startup blocks, and removes every file or directory in `/jffs/dynbq` except `dynbq.ko` and `dynbq-controller.sh`. Review the script and back up any files or hook content you need before using it. Normal controller updates do not invoke it.
+
+## Development and releases
+
+Run offline checks from the repository root:
+
+```bash
+sh scripts/check.sh
+```
+
+CI checks shell syntax, version consistency, and behavioral scenarios that execute the actual controller's policy block. Coverage includes all three radios, dwell thresholds, emergency drops, heavy-load feeder pressure, the outstanding ceiling, and radio independence. These checks do not load the kernel module or verify physical router behavior.
+
+See [release maintenance](docs/releases.md) for the manual, versioned source-release workflow. Repository changes and documentation pushes do not publish a release automatically.
 
 ## License
 
-The kernel shim is GPL-2.0-only. See `LICENSE`.
+[GPL-2.0-only](LICENSE).

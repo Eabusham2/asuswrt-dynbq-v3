@@ -1,11 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-ROUTER="${ROUTER:-192.168.50.1}"
-RUSER="${RUSER:-Eabusham2}"
-SOCK="/tmp/dynbq-v322-ssh-$$"
-WATCH="/tmp/dynbq-v322-watch-$$.log"
-NEWLOG="/tmp/dynbq-v322-newlog-$$.log"
+: "${ROUTER:?Set ROUTER to the router hostname or IP address}"
+: "${RUSER:?Set RUSER to the router SSH administrator username}"
+SOCK="/tmp/dynbq-ssh-$$"
+WATCH="/tmp/dynbq-watch-$$.log"
+NEWLOG="/tmp/dynbq-newlog-$$.log"
 
 cleanup() {
   ssh -S "$SOCK" -O exit "$RUSER@$ROUTER" >/dev/null 2>&1 || true
@@ -18,9 +18,10 @@ command -v networkQuality >/dev/null 2>&1 || {
   exit 2
 }
 
-echo "=== DYNBQ V3.2.2 THREE-BAND REAL-LOAD TEST ==="
+echo "=== DYNBQ REAL-LOAD OBSERVATION ==="
 echo "Run this Mac over Wi-Fi, not Ethernet."
-echo "Expected: <=2000 pps sustained -> 64; ordinary load -> 128; >=30000 pps sustained -> 192."
+echo "Policy: <=2000 pps for 8 samples -> 64; 5/6 GHz >=30000 pps for 12 samples may reach 192."
+echo "2.4 GHz (wl0) is capped at 128; HIGH is only available on wl1/wl2."
 echo
 
 ssh -M -S "$SOCK" -o ControlPersist=180 -fnNT "$RUSER@$ROUTER"
@@ -39,8 +40,9 @@ echo
 echo "=== WATCHING CONTROLLER SAMPLES ==="
 ssh -S "$SOCK" "$RUSER@$ROUTER" '
   i=0
-  while [ "$i" -lt 70 ]; do
+  while [ "$i" -lt 150 ]; do
     date "+ts=%H:%M:%S"
+    printf "wl0 "; cat /tmp/dynbq.wl0.stats 2>/dev/null || echo pending
     printf "wl1 "; cat /tmp/dynbq.wl1.stats 2>/dev/null || echo pending
     printf "wl2 "; cat /tmp/dynbq.wl2.stats 2>/dev/null || echo pending
     sleep 1
@@ -57,8 +59,8 @@ networkQuality -s -v || true
 
 echo
 echo "=== COOLDOWN / LOW PHASE ==="
-echo "No generated load for 18 seconds. HIGH should leave quickly; <=2000 pps for ~6 s should select 64."
-sleep 18
+echo "No generated load for 26 seconds. HIGH exit needs 4 samples; idle MID -> LOW needs 8."
+sleep 26
 
 kill "$WATCHPID" >/dev/null 2>&1 || true
 wait "$WATCHPID" 2>/dev/null || true
@@ -85,7 +87,7 @@ function val(k,  i,a) {
   }
   return -1
 }
-/^wl[12] / {
+/^wl[012] / {
   r=$1
   seq=val("seq")
   if (seq < 0 || seq==lastseq[r]) next
@@ -108,7 +110,7 @@ function val(k,  i,a) {
   if (li==1) { ls[r]++; if (ls[r]>maxls[r]) maxls[r]=ls[r] } else ls[r]=0
 }
 END {
-  for (n=1;n<=2;n++) {
+  for (n=0;n<=2;n++) {
     r="wl" n
     printf "%s: samples=%d max_pps=%d max_outstanding=%d max_high_ok_streak=%d max_high_hold_streak=%d max_low_idle_streak=%d target192_samples=%d target64_samples=%d pressure_samples=%d any_full_samples=%d bqdrop_samples=%d\n", r,samples[r]+0,maxpps[r]+0,maxout[r]+0,maxhs[r]+0,maxhhs[r]+0,maxls[r]+0,highsamples[r]+0,lowsamples[r]+0,pressuresamples[r]+0,fullsamples[r]+0,dropsamples[r]+0
   }
@@ -125,6 +127,7 @@ grep -Eq 'BQ 192->(128|64)' "$NEWLOG" && EXIT=1
 grep -Eq 'reason=very_low BQ (128|192)->64' "$NEWLOG" && LOW=1
 grep -Eq 'reason=low_cleared BQ 64->128' "$NEWLOG" && MIDUP=1
 
+F0="$(printf '%s\n' "$FINAL" | awk -F= '/^wl0 target=/{print $2; exit}')"
 F1="$(printf '%s\n' "$FINAL" | awk -F= '/^wl1 target=/{print $2; exit}')"
 F2="$(printf '%s\n' "$FINAL" | awk -F= '/^wl2 target=/{print $2; exit}')"
 
@@ -135,7 +138,7 @@ echo "=== RESULT ==="
 [ "$EXIT" -eq 1 ] && echo "PASS: HIGH automatically downshifted after load ended" || echo "INFO: no 192 exit transition was available to verify"
 [ "$LOW" -eq 1 ] && echo "PASS: sustained low traffic automatically selected 64" || echo "INFO: no logged low -> 64 transition during this run"
 
-echo "Final targets: wl1=${F1:-unknown} wl2=${F2:-unknown}"
+echo "Final targets: wl0=${F0:-unknown} wl1=${F1:-unknown} wl2=${F2:-unknown}"
 
 echo
 if [ "$UP" -eq 1 ] && [ "$EXIT" -eq 1 ] && [ "$LOW" -eq 1 ]; then

@@ -1,3 +1,20 @@
+## 3.3.1 - 2026-11-23
+
+- Rewrite the public guide around prerequisites, source-only releases, explicit SSH configuration, update/recovery behavior, and the current three-radio policy.
+- Synchronize release metadata with the controller; preserve the 3.3.0 queue policy unchanged.
+- Consolidate the controller updater under `scripts/update-router-macos.sh`, retaining the old path as a compatibility wrapper; validate the selected controller version and all three radios.
+- Remove personal SSH defaults from the updater and macOS load-observation helper; align observations with the current dwell times and 2.4 GHz cap.
+- Replace the obsolete repository-bootstrap publisher with an explicit, version-tagged source prerelease workflow and archive checksums.
+- Replace the stale Python policy copy with tests that execute the production shell policy for all three radios.
+- Preserve legacy router cleanup as an explicitly documented optional migration tool; it is not run by CI or normal updates.
+- No new hardware compatibility, throughput, or reboot-persistence certification is claimed for this release.
+
+## 3.3.0 - 2026-08-15
+
+- Include 2.4 GHz (`wl0`) alongside 5/6 GHz, with HIGH disabled and a 12,000-pps recovery threshold on 2.4 GHz.
+- Ignore SIGHUP in the controller to survive a launching SSH session ending.
+- Retain the extended normal-transition dwell times and per-flowring write cache introduced in 3.2.4–3.2.8: LOW idle 8 samples, recovery/pressure 9, HIGH entry 12, and HIGH exit 4.
+
 ## 3.2.2 - 2026-08-08
 
 - Make LOW slightly easier: MID -> LOW now uses <=2000 TX posts/sec for 3 consecutive 2-second samples (~6 s).

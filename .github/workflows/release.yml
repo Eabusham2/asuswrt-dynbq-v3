@@ -1,0 +1,58 @@
+name: Release source preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish (for example v3.3.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dynbq-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Validate version tag
+        run: '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+      - name: Verify tag and version
+        run: |
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          test "$RELEASE_TAG" = "v$(cat VERSION)"
+          git merge-base --is-ancestor HEAD origin/main
+      - name: Check source and controller policy
+        run: sh scripts/check.sh
+      - name: Package committed source
+        run: bash scripts/package-release.sh
+      - name: Publish experimental source release
+        run: |
+          cat > /tmp/dynbq-release-notes.md <<'NOTES'
+          Experimental DynBQ source distribution for firmware-specific development and existing validated installations.
+
+          The archive contains the controller, kernel-module source, documentation, update helpers, and offline tests. It does **not** include a compiled `dynbq.ko` or a complete firmware build toolchain.
+
+          A kernel module must be built and validated against the exact router firmware and kernel ABI. Historical hardware observations do not certify this release on a different firmware. CI verifies shell syntax and executes the production controller policy with synthetic signals; it does not prove hardware compatibility or throughput.
+
+          See `README.md` for prerequisites, update instructions, and recovery. SHA-256 checksums accompany the source archive.
+          NOTES
+          printf '\nSource commit: `%s`\n' "$(git rev-parse HEAD)" >> /tmp/dynbq-release-notes.md
+          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/*.sha256 \
+            --verify-tag --prerelease --latest=false \
+            --title "DynBQ $RELEASE_TAG — experimental source" \
+            --notes-file /tmp/dynbq-release-notes.md

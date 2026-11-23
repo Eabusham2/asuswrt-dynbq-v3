@@ -1,151 +1,117 @@
-LOW=64
-MID=128
-HIGH=192
-LOW_IDLE_PPS=1500
-LOW_IDLE_SAMPLES=4
-LOW_EXIT_PPS=3000
-LOW_EXIT_SAMPLES=1
-LOW_PRESS_SAMPLES=4
-FULL_SAMPLE_MIN=512
-HIGH_POST_PPS=30000
-HIGH_SAMPLES=4
-HIGH_OUT_MAX=2048
-HIGH_HOLD_PPS=20000
-HIGH_EXIT_SAMPLES=2
-HIGH_TO_LOW_SAMPLES=2
+"""Exercise the production shell policy without loading a module or using a router."""
 
-def step(state, pr, cl, hc, hx, pps=0, out=0, full=0, drop=0):
-    press=int(full>=FULL_SAMPLE_MIN)
-    low_idle=int(pps<=LOW_IDLE_PPS and not press and drop==0)
-    high=int(pps>=HIGH_POST_PPS and out<=HIGH_OUT_MAX and not press and drop==0 and pps>0)
-    high_hold=int(pps>=HIGH_HOLD_PPS and out<=HIGH_OUT_MAX and not press and drop==0)
-    new=state
+from pathlib import Path
+import subprocess
+import unittest
 
-    if state==MID:
-        hx=0
-        if drop>0:
-            new=LOW; pr=cl=hc=0
-        else:
-            if press:
-                pr+=1; cl=0; hc=0
-            else:
-                pr=0
-                cl=cl+1 if low_idle else 0
-                hc=hc+1 if high else 0
-            if pr>=LOW_PRESS_SAMPLES:
-                new=LOW; pr=cl=hc=0
-            elif cl>=LOW_IDLE_SAMPLES:
-                new=LOW; pr=cl=hc=0
-            elif hc>=HIGH_SAMPLES:
-                new=HIGH; pr=cl=hc=0
-
-    elif state==LOW:
-        pr=0; hc=0; hx=0
-        if drop>0 or press:
-            cl=0
-        elif pps>=LOW_EXIT_PPS:
-            cl+=1
-            if cl>=LOW_EXIT_SAMPLES:
-                new=MID; cl=0
-        else:
-            cl=0
-
-    elif state==HIGH:
-        pr=0; hc=0
-        if drop>0:
-            new=LOW; cl=hx=0
-        elif press:
-            new=MID; cl=hx=0
-        else:
-            cl=cl+1 if low_idle else 0
-            hx=0 if high_hold else hx+1
-            if cl>=HIGH_TO_LOW_SAMPLES:
-                new=LOW; cl=hx=0
-            elif hx>=HIGH_EXIT_SAMPLES:
-                new=MID; cl=hx=0
-    else:
-        new=MID; pr=cl=hc=hx=0
-
-    return new,pr,cl,hc,hx
-
-def exercise_radio(label):
-    # MID -> LOW: easier idle entry, four 2-second samples.
-    s=(MID,0,0,0,0)
-    for _ in range(3): s=step(*s,pps=1000)
-    assert s[0]==MID, label
-    s=step(*s,pps=1000)
-    assert s[0]==LOW, label
-
-    # LOW -> MID: one clearly active sample.
-    s=step(*s,pps=4000)
-    assert s[0]==MID, label
-
-    # MID -> HIGH: still requires four very-high clean samples.
-    for _ in range(3): s=step(*s,pps=40000,out=1500,full=100)
-    assert s[0]==MID, label
-    s=step(*s,pps=40000,out=1500,full=100)
-    assert s[0]==HIGH, label
-
-    # HIGH -> MID: two below-hold samples that are not idle.
-    s=step(*s,pps=10000,out=100)
-    assert s[0]==HIGH, label
-    s=step(*s,pps=10000,out=100)
-    assert s[0]==MID, label
-
-    # Re-enter HIGH, then very-low collapses directly to LOW in two samples.
-    for _ in range(4): s=step(*s,pps=40000,out=1500,full=50)
-    assert s[0]==HIGH, label
-    s=step(*s,pps=500,out=0)
-    assert s[0]==HIGH, label
-    s=step(*s,pps=500,out=0)
-    assert s[0]==LOW, label
-
-    # Real BQ drop is immediate LOW from MID or HIGH.
-    s=(MID,0,0,0,0); s=step(*s,pps=5000,drop=1)
-    assert s[0]==LOW, label
-    s=(HIGH,0,0,0,0); s=step(*s,pps=35000,drop=1)
-    assert s[0]==LOW, label
-
-    # Severe feeder pressure (>=512) blocks HIGH; smaller counts do not.
-    s=(MID,0,0,0,0)
-    for _ in range(8): s=step(*s,pps=50000,out=1500,full=600)
-    assert s[0]!=HIGH, label
-
-    # Outstanding above the safety ceiling still blocks HIGH.
-    s=(MID,0,0,0,0)
-    for _ in range(8): s=step(*s,pps=50000,out=2049,full=0)
-    assert s[0]==MID, label
-
-    # The empirically observed envelope should be allowed into HIGH.
-    s=(MID,0,0,0,0)
-    for _ in range(4): s=step(*s,pps=56140,out=1562,full=100)
-    assert s[0]==HIGH, label
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = (ROOT / "scripts/dynbq-controller.sh").read_text()
+CONSTANTS = SOURCE.split("\ntrim_log()", 1)[0]
+POLICY = SOURCE.split('            NEW="$CUR"\n', 1)[1].split(
+    '            eval S$R="$NEW"', 1
+)[0]
+PROGRAM = CONSTANTS + '''
+R=$1; CUR=$2; PR=$3; CL=$4; HC=$5; HX=$6
+PPS=$7; OUT=$8; DF=$9
+shift 9
+DD=$1; DP=$((PPS * INTERVAL)); NEW=$CUR
+''' + POLICY + '\nprintf "%s %s %s %s %s\\n" "$NEW" "$PR" "$CL" "$HC" "$HX"\n'
 
 
-def run():
-    # Exercise the exact same independent state machine for both production radios.
-    exercise_radio('wl1')
-    exercise_radio('wl2')
+def initial(queue=128):
+    return queue, 0, 0, 0, 0
 
-    # Independence: loading wl1 must not move idle wl2, and vice versa.
-    r1=(LOW,0,0,0,0)
-    r2=(LOW,0,0,0,0)
-    r1=step(*r1,pps=5000)
-    r2=step(*r2,pps=100)
-    assert r1[0]==MID and r2[0]==LOW
 
-    for _ in range(4):
-        r1=step(*r1,pps=40000,out=1500,full=100)
-        r2=step(*r2,pps=100)
-    assert r1[0]==HIGH and r2[0]==LOW
+def step(radio, state, pps=0, outstanding=0, feeder_full=0, drops=0):
+    """Run the exact case statement and signal calculation from the controller."""
+    result = subprocess.run(
+        ["sh", "-s", "--", *map(str, (radio, *state, pps, outstanding, feeder_full, drops))],
+        input=PROGRAM, text=True, capture_output=True, check=True,
+    )
+    return tuple(map(int, result.stdout.split()))
 
-    r1=(LOW,0,0,0,0)
-    r2=(LOW,0,0,0,0)
-    r2=step(*r2,pps=5000)
-    assert r1[0]==LOW and r2[0]==MID
-    for _ in range(4): r2=step(*r2,pps=40000,out=1500,full=100)
-    assert r2[0]==HIGH
 
-    print('state-machine tests: PASS (wl1 + wl2, up/down + independence)')
+class ControllerPolicy(unittest.TestCase):
+    def advance(self, radio, state, samples, **signals):
+        for _ in range(samples):
+            state = step(radio, state, **signals)
+        return state
 
-if __name__=='__main__': run()
+    def test_idle_dwell_and_recovery_for_all_radios(self):
+        for radio in range(3):
+            with self.subTest(radio=radio):
+                state = self.advance(radio, initial(), 7, pps=2000)
+                self.assertEqual(state[0], 128)
+                state = step(radio, state, pps=2000)
+                self.assertEqual(state[0], 64)
+                recovery = 12000 if radio == 0 else 4000
+                state = self.advance(radio, state, 8, pps=recovery)
+                self.assertEqual(state[0], 64)
+                state = step(radio, state, pps=recovery)
+                self.assertEqual(state[0], 128)
+
+    def test_2ghz_higher_recovery_threshold_and_high_cap(self):
+        state = self.advance(0, initial(64), 15, pps=11999)
+        self.assertEqual(state[0], 64)
+        state = self.advance(0, initial(), 15, pps=50000, outstanding=1000)
+        self.assertEqual(state[0], 128)
+        self.assertEqual(step(0, initial(192), pps=50000)[0], 128)
+
+    def test_high_entry_hold_and_downshift_on_5_and_6ghz(self):
+        for radio in (1, 2):
+            with self.subTest(radio=radio):
+                # Feeder-full signals alone must not prevent healthy heavy load.
+                state = self.advance(radio, initial(), 11, pps=30000,
+                                     outstanding=2048, feeder_full=600)
+                self.assertEqual(state[0], 128)
+                state = step(radio, state, pps=30000, outstanding=2048, feeder_full=600)
+                self.assertEqual(state[0], 192)
+                state = self.advance(radio, state, 10, pps=20000, outstanding=2048)
+                self.assertEqual(state[0], 192)
+                state = self.advance(radio, state, 3, pps=10000)
+                self.assertEqual(state[0], 192)
+                state = step(radio, state, pps=10000)
+                self.assertEqual(state[0], 128)
+                state = self.advance(radio, initial(192), 3, pps=500)
+                self.assertEqual(state[0], 192)
+                self.assertEqual(step(radio, state, pps=500)[0], 64)
+
+    def test_real_drop_bypasses_dwell(self):
+        for radio, queue in ((0, 128), (1, 128), (1, 192), (2, 128), (2, 192)):
+            with self.subTest(radio=radio, queue=queue):
+                self.assertEqual(step(radio, initial(queue), pps=40000, drops=1)[0], 64)
+
+    def test_pressure_dwell_and_outstanding_ceiling(self):
+        for radio in range(3):
+            state = self.advance(radio, initial(), 8, pps=10000, feeder_full=512)
+            self.assertEqual(state[0], 128)
+            self.assertEqual(step(radio, state, pps=10000, feeder_full=512)[0], 64)
+        for radio in (1, 2):
+            state = self.advance(radio, initial(), 20, pps=50000, outstanding=2049)
+            self.assertEqual(state[0], 128)
+
+    def test_nonconsecutive_signals_reset_dwell(self):
+        state = self.advance(1, initial(), 11, pps=40000)
+        state = step(1, state, pps=10000)
+        self.assertEqual(step(1, state, pps=40000)[0], 128)
+        state = self.advance(1, initial(64), 8, pps=4000)
+        state = step(1, state, pps=3999)
+        self.assertEqual(step(1, state, pps=4000)[0], 64)
+
+    def test_radios_remain_independent(self):
+        states = [initial(64) for _ in range(3)]
+        for _ in range(25):
+            states = [step(radio, state, pps=40000 if radio == 1 else 100)
+                      for radio, state in enumerate(states)]
+        self.assertEqual([state[0] for state in states], [64, 192, 64])
+
+    def test_unknown_state_recovers_to_mid(self):
+        self.assertEqual(step(1, initial(999))[0], 128)
+
+    def test_release_version_matches_controller(self):
+        version = (ROOT / "VERSION").read_text().strip()
+        self.assertIn(f"\nVERSION={version}\n", SOURCE)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

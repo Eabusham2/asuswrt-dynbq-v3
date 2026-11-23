@@ -1,8 +1,10 @@
-# Verified observations
+# Historical hardware observations
 
-## Working final state
+## Recorded firmware baseline
 
-On the tested GT-BE19000AI / Merlin 3006.102.8_2 build:
+These observations were recorded during earlier controller development on GT-BE19000AI / Merlin 3006.102.8_2. They are historical evidence, not a certification of the current source release or of any later firmware.
+
+The recorded capability baseline was:
 
 ```text
 txoffl:1
@@ -33,3 +35,9 @@ Capability-safe same-value readback probes showed the tested firmware does not e
 ## Logging
 
 Production logging is tmpfs-only and bounded. No persistent JFFS logs are part of the project.
+
+## Earlier V3.2.2 traffic cycle
+
+The earlier V3.2.2 controller was observed completing `64 → 128 → 192 → 128 → 64` on `wl1` during a macOS `networkQuality` run. The recorded maximum TX-post rate was 63,497 pps, maximum outstanding was 1,900, and BQ drops stayed at zero. `wl2` stayed at LOW when it did not carry the test traffic.
+
+That run used older dwell times and preceded the three-radio V3.3.0 policy. It must not be presented as a fresh hardware verification of V3.3.1.
